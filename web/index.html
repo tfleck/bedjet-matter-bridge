@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BedJet Matter Bridge — Flasher</title>
+    <link rel="stylesheet" href="styles.css">
+    <script type="module" src="https://unpkg.com/esp-web-tools@9/dist/web/install-button.js?module"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">
+                <div class="logo-icon">🛏️</div>
+                <div>
+                    <h1>BedJet Matter Bridge</h1>
+                    <p class="subtitle">Flash firmware and pair with Matter</p>
+                </div>
+            </div>
+            <div class="version-badge" id="versionBadge">Loading...</div>
+        </header>
+
+        <section class="card" id="step-flash">
+            <div class="step-number">1</div>
+            <div class="card-content">
+                <h2>Install Firmware</h2>
+                <p>Connect your ESP32 via USB-C and click the button below.</p>
+                <div class="chip-selector">
+                    <label for="chipSelect">Your ESP32 chip:</label>
+                    <select id="chipSelect">
+                        <option value="">Auto-detect (recommended)</option>
+                        <option value="esp32c6">ESP32-C6 (recommended, Thread support)</option>
+                        <option value="esp32s3">ESP32-S3</option>
+                        <option value="esp32">ESP32 (Classic)</option>
+                        <option value="esp32c3">ESP32-C3</option>
+                        <option value="esp32s2">ESP32-S2</option>
+                        <option value="esp32h2">ESP32-H2</option>
+                    </select>
+                </div>
+                <div class="install-container">
+                    <esp-web-install-button id="installButton"></esp-web-install-button>
+                </div>
+                <div class="browser-warning" id="browserWarning" style="display:none;">
+                    <p>⚠️ Requires Chrome, Edge, or Opera with Web Serial API.</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="card" id="step-serial">
+            <div class="step-number">2</div>
+            <div class="card-content">
+                <h2>Get Matter Pairing Code</h2>
+                <p>Click below to view the serial output and QR code.</p>
+                <button id="connectSerialBtn" class="btn btn-secondary">
+                    📡 Open Serial Monitor
+                </button>
+                <div id="serialOutput" class="serial-output" style="display:none;">
+                    <div class="serial-header">
+                        <span class="serial-status">● Connected</span>
+                        <button id="disconnectSerialBtn" class="btn-small">Disconnect</button>
+                    </div>
+                    <div id="serialConsole" class="serial-console">
+                        <pre id="consoleOutput"></pre>
+                    </div>
+                </div>
+                <div id="qrDisplay" class="qr-display" style="display:none;">
+                    <h3>📱 Scan this QR code:</h3>
+                    <div id="qrAscii" class="qr-ascii"></div>
+                    <div class="manual-code">
+                        <p>Manual pairing code:</p>
+                        <code id="manualCode"></code>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="card" id="help">
+            <div class="card-content full-width">
+                <h2>❓ Troubleshooting</h2>
+                <details>
+                    <summary>Button doesn't appear</summary>
+                    <p>Use Chrome, Edge, or Opera. Firefox and Safari don't support Web Serial.</p>
+                </details>
+                <details>
+                    <summary>Cannot find serial port</summary>
+                    <p>Ensure USB cable supports data transfer. Install CP210x or CH340 drivers if needed.</p>
+                </details>
+                <details>
+                    <summary>No QR code appears</summary>
+                    <p>Wait 30-60 seconds after connecting. Press RESET on the board to restart boot sequence.</p>
+                </details>
+            </div>
+        </section>
+
+        <footer>
+            <p>
+                <a href="https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}" target="_blank">View on GitHub</a>
+                ·
+                <a href="https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases" target="_blank">Releases</a>
+            </p>
+        </footer>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+idf_component_register(
+    SRCS
+        "main.cpp"
+        "bedjet_ble.cpp"
+        "bedjet_matter.cpp"
+        "bedjet_ota.cpp"
+    INCLUDE_DIRS "."
+    REQUIRES
+        bt
+        nvs_flash
+        esp_wifi
+        esp_matter
+        esp_https_ota
+        mbedtls
+        esp_http_client
+        esp_timer
+        sha
+        qrcode
+)
