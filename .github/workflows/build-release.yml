@@ -11,9 +11,8 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -53,10 +52,38 @@ jobs:
           python-version: '3.11'
 
       - name: Install ESP-IDF
-        uses: espressif/esp-idf-ci-action@v1
+        uses: espressif/install-esp-idf-action@v1
         with:
-          esp_idf_version: ${{ env.IDF_VERSION }}
+          esp-idf-version: ${{ env.IDF_VERSION }}
           target: ${{ matrix.target }}
+          extra-components: ""
+
+      - name: Install ESP-Matter
+        shell: bash
+        run: |
+          echo "Installing ESP-Matter..."
+          
+          # Navigate to IDF components directory
+          cd $IDF_PATH/components
+          
+          # Clone ESP-Matter repository
+          rm -rf esp-matter
+          git clone https://github.com/espressif/esp-matter.git esp-matter
+          cd esp-matter
+          
+          # Checkout specific version
+          git checkout v1.3.0
+          
+          # Initialize submodules
+          git submodule update --recursive --init
+          
+          # Install ESP-Matter (installs zap-cli, connectedhomeip deps, etc.)
+          ./install.sh -j 8
+          
+          # Set environment variable for CMake to find ESP-Matter
+          echo "EXTRA_COMPONENT_DIRS=$IDF_PATH/components" >> $GITHUB_ENV
+          
+          echo "ESP-Matter installation complete"
 
       - name: Install Python dependencies
         run: pip install pyserial esptool
@@ -64,9 +91,11 @@ jobs:
       - name: Configure SDK
         shell: bash
         run: |
+          cd $GITHUB_WORKSPACE
+          
           idf.py set-target ${{ matrix.target }}
           idf.py fullclean || true
-
+          
           cat >> sdkconfig.defaults << EOF
           CONFIG_FREERTOS_HZ=1000
           CONFIG_LOG_DEFAULT_LEVEL=3
@@ -80,8 +109,9 @@ jobs:
           CONFIG_LWIP_MAX_SOCKETS=25
           CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
           CONFIG_HTTP_TRANSPORT_OVER_SSL=y
+          CONFIG_EXPERIMENTAL_FEATURES=y
           EOF
-
+          
           if [ "${{ matrix.features }}" == "thread-enabled" ] || [ "${{ matrix.features }}" == "thread-only" ]; then
             cat >> sdkconfig.defaults << EOF
             CONFIG_OPENTHREAD_ENABLED=y
@@ -89,7 +119,7 @@ jobs:
             CONFIG_MATTER_USE_6LOWPAN=y
             EOF
           fi
-
+          
           if [ "${{ matrix.flash_size }}" == "8MB" ]; then
             echo 'CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y' >> sdkconfig.defaults
           else
@@ -99,6 +129,8 @@ jobs:
       - name: Build firmware
         shell: bash
         run: |
+          cd $GITHUB_WORKSPACE
+          
           VERSION="${GITHUB_REF#refs/tags/}"
           sed -i "s/#define APP_VERSION.*/#define APP_VERSION \"$VERSION\"/" main/main.cpp
           idf.py build
@@ -107,9 +139,9 @@ jobs:
         shell: bash
         run: |
           TARGET=${{ matrix.target }}
-          BIN_FILE="${{ env.PROJECT_NAME }}.bin"
+          BIN_FILE="bedjet_matter_bridge.bin"
           OUTPUT="firmware_${TARGET}_combined.bin"
-
+          
           esptool.py --chip $TARGET merge_bin \
             -o build/$OUTPUT \
             --flash_mode dio \
@@ -118,7 +150,7 @@ jobs:
             0x0 build/bootloader/bootloader.bin \
             0x8000 build/partition_table/partition-table.bin \
             0xe000 build/$BIN_FILE
-
+            
           ls -lh build/*.bin
 
       - name: Calculate SHA256
@@ -145,10 +177,10 @@ jobs:
         with:
           pattern: firmware-*
           merge-multiple: true
-
+      
       - name: Consolidate checksums
         run: cat checksums*.txt | sort -u > checksums_final.txt
-
+      
       - uses: actions/upload-artifact@v4
         with:
           name: checksums-all
@@ -164,7 +196,7 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -207,7 +239,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
+    
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
