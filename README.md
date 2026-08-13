@@ -15,7 +15,7 @@ ESP32 firmware that bridges BedJet V3 climate system to Matter smart home standa
 
 ### 1. Prerequisites
 
-- ESP-IDF v5.2.2 or later
+- ESP-IDF v6.0.2 or later
 - Python 3.8+
 - Chrome/Edge browser (for web flasher)
 - ESP32 board (recommended: ESP32-C6 for Thread support)
@@ -168,5 +168,5 @@ GPLv3 License - see LICENSE file for details.
 ## Credits
 
 - Based on natekspencer/ha-bedjet for BedJet protocol reverse engineering
-- Built with ESP-Matter v1.3
+- Built with ESP-Matter v1.6
 - Uses ESP Web Tools for browser flashing

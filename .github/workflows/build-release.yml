@@ -6,7 +6,7 @@ on:
       - 'v*'
 
 env:
-  IDF_VERSION: v5.2.2
+  IDF_VERSION: v6.0.2
   PROJECT_NAME: bedjet_matter_bridge
 
 jobs:
@@ -72,7 +72,7 @@ jobs:
           cd esp-matter
           
           # Checkout specific version
-          git checkout v1.3.0
+          git checkout release/v1.6
           
           # Initialize submodules
           git submodule update --recursive --init
