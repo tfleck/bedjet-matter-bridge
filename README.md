@@ -203,11 +203,12 @@ commissioning and the BedJet pairing survive a firmware update — no re-setup.
 
 - **Add a controller:** add the bridge again (Matter supports several fabrics at once).
 - **Remove a controller:** delete the accessory in that controller's app.
-- **Factory reset:** tick **Factory reset** on the flasher page before installing. It
-  overwrites only the NVS partition (Matter fabrics and the saved BedJet address), so
-  the bridge rediscovers the BedJet and needs re-pairing. With the toolchain,
-  `idf.py -p COM5 erase-flash` does a full-chip erase instead, followed by
-  `idf.py -p COM5 flash monitor`.
+- **Factory reset:** on the flasher's install prompt, tick **Erase device** before
+  clicking Next. Erasing wipes the whole flash (Matter fabrics and the saved BedJet
+  address), so the bridge rediscover the BedJet and needs re-pairing. The box is
+  **off by default**, which is why a normal update keeps your pairing. With the
+  toolchain, `idf.py -p COM5 erase-flash` does the same, then `idf.py -p COM5 flash
+  monitor`.
 
 ---
 
@@ -220,6 +221,11 @@ is still holding the link.
 
 The BedJet also keeps its BLE link idle — it may drop the connection when left alone for
 a while. The bridge will reconnect by itself.
+
+The bridge polls the BedJet's status every **15 s** (matching ha-bedjet). The read is
+what prompts the BedJet to send its 20-byte state notification, so changes made on the
+device itself — e.g. from the RF remote, which never goes through the bridge — are
+picked up and republished to Matter within that window.
 
 ## Hardware Requirements
 
@@ -387,12 +393,13 @@ ESP32-C6 only. `sdkconfig.defaults` pins the target, and the CI matrix builds ju
 Two workflows:
 
 - **Build and Release** (on `v*` tags) builds the firmware and publishes a GitHub
-  Release. The firmware version comes from the tag (`git describe`), so Apple Home
-  shows the tagged version. Per target it attaches the combined image, its `.sha256`,
-  and the individual partition parts (`part_<target>_0x<offset>_<name>.bin`).
-- **Deploy Flasher** (on release published and on push to `main`) mirrors every
-  release's parts into the Pages site at `web/firmware/<tag>/` and writes
-  `web/firmware/index.json`, then publishes the site.
+  Release. It pins `version.txt` from the tag (git-describe is unreliable in the
+  container), so Apple Home shows the tagged version, and per target attaches the
+  combined image, its `.sha256`, and the individual partition parts
+  (`part_<target>_0x<offset>_<name>.bin`). It then calls the flasher deploy.
+- **Deploy Flasher** (on push to `main`, manually, and called by Build and Release
+  after the release exists) mirrors every release's parts into the Pages site at
+  `web/firmware/<tag>/` and writes `web/firmware/index.json`, then publishes the site.
 
 The flasher loads that same-origin `index.json`, lists versions newest-first (defaulting
 to latest), verifies each part's SHA-256, and writes **only the individual partitions —

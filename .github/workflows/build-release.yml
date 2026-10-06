@@ -60,6 +60,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-ccache-${{ matrix.target }}-
 
+      - name: Pin firmware version from tag
+        shell: bash
+        run: |
+          # git describe fails in the container ("detected dubious ownership"),
+          # so IDF falls back to PROJECT_VER=1. Pin the version explicitly.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "${GITHUB_REF_NAME}" > version.txt
+            echo "PROJECT_VER will be ${GITHUB_REF_NAME}"
+          fi
+
       - name: Configure and build firmware
         shell: bash
         run: |
@@ -166,3 +177,14 @@ jobs:
             firmware_*_combined.bin
             firmware_*_combined.bin.sha256
             part_*.bin
+
+  # Rebuild the Pages flasher after the release exists so the new version is
+  # mirrored automatically (the release event from GITHUB_TOKEN does not trigger
+  # workflows, so call it directly).
+  deploy-pages:
+    needs: [create-release]
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/pages.yml

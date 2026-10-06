@@ -96,17 +96,21 @@ private:
     static constexpr uint32_t CMD_QUEUE_LEN  = 16;
     static constexpr uint32_t BACKOFF_MIN_MS = 1000;
     static constexpr uint32_t BACKOFF_MAX_MS = 30000;
-    static constexpr uint32_t STATUS_POLL_MS = 60000;
-    // Upper bound on silence from BOTH the 20-byte status notify and the 60 s
-    // flags poll before the link is assumed dead. The BedJet only pushes state
-    // on change, so an idle device is silent for long stretches: a short
+    // Poll the status characteristic on this cadence. The read is what makes the
+    // BedJet emit a fresh 20-byte state notification, so it is also how the
+    // bridge picks up changes made on the device itself (e.g. the RF remote,
+    // which never goes through us). 15 s mirrors ha-bedjet's coordinator.
+    static constexpr uint32_t STATUS_POLL_MS = 15000;
+    // Upper bound on silence from BOTH the 20-byte status notify and the status
+    // poll before the link is assumed dead. The BedJet only pushes state on
+    // change, so an idle device is silent for long stretches: a short
     // notify-only deadline false-triggered on every idle period and caused a
-    // reconnect storm. A successful flags read counts as liveness, so the poll
+    // reconnect storm. A successful status read counts as liveness, so the poll
     // keeps a healthy idle link alive while this still catches a genuinely
     // wedged link. STATUS_POLL_FAILURES is the faster tripwire.
     static constexpr uint32_t NOTIFY_WATCHDOG_MS = 300000;
-    // Consecutive failed 60 s status polls tolerated before recycling the link
-    // (~3 minutes even if the watchdog above has not elapsed).
+    // Consecutive failed status polls tolerated before recycling the link
+    // (~45 s even if the watchdog above has not elapsed).
     static constexpr int STATUS_POLL_FAILURES = 3;
     static constexpr uint32_t SCAN_SECONDS   = 10;
     static constexpr uint32_t SCAN_RETRY_MS  = 1000;

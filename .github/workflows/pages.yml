@@ -4,12 +4,13 @@ name: Deploy Flasher
 # so the browser can fetch it same-origin (GitHub release assets are not
 # CORS-fetchable from JS).
 on:
-  release:
-    types: [published]
   push:
     branches:
       - main
   workflow_dispatch:
+  # Called by Build and Release after the release is created: the "release:
+  # published" event is raised by GITHUB_TOKEN, which does not trigger workflows.
+  workflow_call:
 
 permissions:
   contents: read
@@ -89,23 +90,7 @@ jobs:
                   versions.append({"tag": tag, "builds": builds})
 
           os.makedirs("web/firmware", exist_ok=True)
-
-          # NVS geometry (from partitions.csv) so the flasher can offer a factory
-          # reset that erases only the NVS partition. Offset/size are hex.
-          nvs = None
-          if os.path.exists("partitions.csv"):
-              for line in open("partitions.csv"):
-                  line = line.strip()
-                  if not line or line.startswith("#"):
-                      continue
-                  cols = [c.strip() for c in line.split(",")]
-                  if len(cols) >= 5 and cols[0] == "nvs":
-                      nvs = {"offset": int(cols[3], 0), "size": int(cols[4], 0)}
-                      break
-
           index = {"versions": versions}
-          if nvs:
-              index["nvs"] = nvs
           with open("web/firmware/index.json", "w") as fh:
               json.dump(index, fh, indent=2)
           print(json.dumps(index, indent=2))
