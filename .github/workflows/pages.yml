@@ -45,7 +45,7 @@ jobs:
           while IFS= read -r tag; do
             [ -z "$tag" ] && continue
             mkdir -p "web/firmware/$tag"
-            gh release download "$tag" --pattern 'firmware_*' \
+            gh release download "$tag" --pattern 'firmware_*' --pattern 'part_*' \
               --dir "web/firmware/$tag" --clobber || true
           done < /tmp/tags.txt
           echo "=== staged firmware ==="
@@ -55,33 +55,36 @@ jobs:
         shell: bash
         run: |
           python3 - <<'PY'
-          import json, os, hashlib
+          import json, os, hashlib, re
 
           tags = []
           if os.path.exists("/tmp/tags.txt"):
               tags = [t.strip() for t in open("/tmp/tags.txt") if t.strip()]
+
+          # part_<chip>_<offset>_<label>.bin, e.g. part_esp32c6_0x20000_app.bin
+          part_re = re.compile(r"^part_(?P<chip>.+?)_(?P<off>0x[0-9a-fA-F]+)_(?P<label>.+)$")
 
           versions = []
           for tag in tags:
               d = os.path.join("web/firmware", tag)
               if not os.path.isdir(d):
                   continue
-              builds = []
+              by_chip = {}
               for fn in sorted(os.listdir(d)):
-                  if not fn.endswith("_combined.bin"):
+                  m = part_re.match(fn)
+                  if not m:
                       continue
-                  chip = fn[len("firmware_"):-len("_combined.bin")]
-                  shafile = os.path.join(d, fn + ".sha256")
-                  if os.path.isfile(shafile):
-                      sha = open(shafile).read().split()[0]
-                  else:
-                      with open(os.path.join(d, fn), "rb") as fh:
-                          sha = hashlib.sha256(fh.read()).hexdigest()
-                  builds.append({
-                      "chip": chip,
+                  with open(os.path.join(d, fn), "rb") as fh:
+                      sha = hashlib.sha256(fh.read()).hexdigest()
+                  by_chip.setdefault(m.group("chip"), []).append({
+                      "offset": int(m.group("off"), 16),
                       "path": f"firmware/{tag}/{fn}",
                       "sha256": sha,
                   })
+              builds = []
+              for chip, parts in sorted(by_chip.items()):
+                  parts.sort(key=lambda p: p["offset"])
+                  builds.append({"chip": chip, "parts": parts})
               if builds:
                   versions.append({"tag": tag, "builds": builds})
 

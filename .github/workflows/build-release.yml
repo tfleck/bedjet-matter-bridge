@@ -28,6 +28,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # Fetch tags so `git describe` yields the tag as PROJECT_VER - the
+          # Basic Information SoftwareVersionString Apple Home displays. The
+          # default shallow checkout falls back to "1".
+          fetch-depth: 0
 
       - name: Install Matter host prerequisites
         run: |
@@ -64,26 +69,39 @@ jobs:
           idf.py set-target ${{ matrix.target }}
           idf.py build
 
+      - name: Report firmware version
+        shell: bash
+        run: |
+          . /opt/esp/idf/export.sh
+          python -c "import json;print('PROJECT_VER =', json.load(open('build/project_description.json'))['project_version'])"
+
       - name: Create combined firmware binary
         shell: bash
         run: |
           . /opt/esp/idf/export.sh
           TARGET="${{ matrix.target }}"
-          OUTPUT="firmware_${TARGET}_combined.bin"
-          # flash_args lists paths relative to build/, so merge from there.
           cd build
-          python -m esptool --chip "$TARGET" merge_bin -o "$OUTPUT" @flash_args
-          ls -lh "$OUTPUT"
+          python -m esptool --chip "$TARGET" merge_bin -o "firmware_${TARGET}_combined.bin" @flash_args
+          ls -lh "firmware_${TARGET}_combined.bin"
 
-      - name: Calculate SHA256
+      - name: Stage flashable parts and checksum
         shell: bash
         run: |
           cd build
-          # One checksum file per firmware, coreutils format so it verifies with
-          # `sha256sum -c firmware_<target>_combined.bin.sha256`.
-          sha256sum "firmware_${{ matrix.target }}_combined.bin" \
-            > "firmware_${{ matrix.target }}_combined.bin.sha256"
-          cat "firmware_${{ matrix.target }}_combined.bin.sha256"
+          TARGET="${{ matrix.target }}"
+          # Individual parts with the offset encoded in the filename. The web
+          # flasher writes these directly, so it never touches the NVS partition.
+          # (The combined image pads the gaps with 0xFF, which would erase
+          # commissioning and the saved BedJet pairing.)
+          rm -f part_${TARGET}_*.bin
+          while read -r off file; do
+            case "$file" in
+              *.bin) cp "$file" "part_${TARGET}_${off}_$(basename "$file")" ;;
+            esac
+          done < <(grep -E '^0x[0-9a-fA-F]+[[:space:]]+.*\.bin$' flash_args)
+          sha256sum "firmware_${TARGET}_combined.bin" > "firmware_${TARGET}_combined.bin.sha256"
+          ls -lh part_${TARGET}_*.bin "firmware_${TARGET}_combined.bin.sha256"
+          cat "firmware_${TARGET}_combined.bin.sha256"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -92,6 +110,7 @@ jobs:
           path: |
             build/firmware_${{ matrix.target }}_combined.bin
             build/firmware_${{ matrix.target }}_combined.bin.sha256
+            build/part_${{ matrix.target }}_*.bin
           retention-days: 30
 
   create-release:
@@ -123,12 +142,19 @@ jobs:
             Flash directly from your browser (Chrome, Edge, or Opera):
             **https://${{ github.repository_owner }}.github.io/bedjet-matter-bridge/web/index.html**
 
+            The web flasher updates in place: it writes the individual partitions
+            and **does not erase NVS**, so Matter commissioning and the BedJet
+            pairing survive an update.
+
             ### 💡 Supported chip
             | Chip | Features | Firmware | Checksum |
             |------|----------|----------|----------|
             | **ESP32-C6** | Wi-Fi + BLE + Thread | `firmware_esp32c6_combined.bin` | `firmware_esp32c6_combined.bin.sha256` |
 
             ### 🔧 Manual install
+            The combined image is a **full install** - it overwrites NVS (Matter
+            commissioning and BedJet pairing), so use it only for first-time setup.
+
             ```bash
             sha256sum --check firmware_esp32c6_combined.bin.sha256
             python -m esptool --chip esp32c6 erase_flash
@@ -139,3 +165,4 @@ jobs:
           files: |
             firmware_*_combined.bin
             firmware_*_combined.bin.sha256
+            part_*.bin

@@ -93,26 +93,31 @@ async function initInstallButton() {
         verifiedBlobUrls = [];
     }
 
-    // Download the firmware once, verify its SHA-256, and keep the exact
-    // verified bytes behind a blob URL so esp-web-tools flashes what we checked.
+    // Download each part once, verify its SHA-256, and keep the exact verified
+    // bytes behind blob URLs so esp-web-tools flashes what we checked. The parts
+    // are written at their real offsets and never cover the NVS partition.
     async function verifyBuild(build) {
-        const res = await fetch(build.path, { cache: "no-cache" });
-        if (!res.ok) {
-            throw new Error(`firmware download failed (HTTP ${res.status})`);
+        const verifiedParts = [];
+        for (const part of build.parts) {
+            const res = await fetch(part.path, { cache: "no-cache" });
+            if (!res.ok) {
+                throw new Error(`firmware download failed (HTTP ${res.status})`);
+            }
+            const bytes = await res.arrayBuffer();
+            const actual = toHex(await crypto.subtle.digest("SHA-256", bytes));
+            const expected = (part.sha256 || "").toLowerCase();
+            if (!expected) {
+                return { ok: false, reason: "no published checksum in index.json" };
+            }
+            if (expected !== actual) {
+                return { ok: false, reason: `SHA-256 mismatch for ${part.path.split("/").pop()}` };
+            }
+            const blobUrl = URL.createObjectURL(
+                new Blob([bytes], { type: "application/octet-stream" }));
+            verifiedBlobUrls.push(blobUrl);
+            verifiedParts.push({ path: blobUrl, offset: part.offset });
         }
-        const bytes = await res.arrayBuffer();
-        const actual = toHex(await crypto.subtle.digest("SHA-256", bytes));
-        const expected = (build.sha256 || "").toLowerCase();
-        if (!expected) {
-            return { ok: false, reason: "no published checksum in index.json" };
-        }
-        if (expected !== actual) {
-            return { ok: false, reason: `SHA-256 mismatch (expected ${expected})` };
-        }
-        const blobUrl = URL.createObjectURL(
-            new Blob([bytes], { type: "application/octet-stream" }));
-        verifiedBlobUrls.push(blobUrl);
-        build.parts = [{ path: blobUrl, offset: 0 }];
+        build.verifiedParts = verifiedParts;
         return { ok: true };
     }
 
@@ -156,7 +161,10 @@ async function initInstallButton() {
             // This device does not implement Improv serial, so skip the dialog's
             // post-install Improv wait entirely.
             new_install_improv_wait_time: 0,
-            builds: subset.map(b => ({ chipFamily: b.chipFamily, parts: b.parts })),
+            // Update in place: never erase, so NVS (Matter commissioning + the
+            // saved BedJet pairing) is preserved.
+            new_install_prompt_erase: false,
+            builds: subset.map(b => ({ chipFamily: b.chipFamily, parts: b.verifiedParts })),
         };
         manifestUrl = URL.createObjectURL(
             new Blob([JSON.stringify(manifest)], { type: "application/json" }));
@@ -169,8 +177,7 @@ async function initInstallButton() {
         const chosen = versions.find(v => v.tag === tag) || versions[0];
         activeBuilds = (chosen.builds || []).map(b => ({
             chipFamily: CHIP_FAMILIES[b.chip] || b.chip,
-            path: b.path,
-            sha256: b.sha256,
+            parts: b.parts || [],
         }));
         versionSelect.value = chosen.tag;
         versionBadge.textContent = chosen.tag;

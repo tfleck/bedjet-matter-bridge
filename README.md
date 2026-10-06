@@ -198,16 +198,19 @@ Try:
 
 ### 7. Re-pair or change controllers
 
-Factory-reset Matter credentials by erasing the flash. The simplest way is to re-run
-the browser flasher and choose **Erase** when it prompts. With the toolchain:
+The browser flasher updates in place and **never erases**, so your Matter commissioning
+and the BedJet pairing survive a firmware update — no re-setup.
+
+To pair an additional controller, add the bridge again (Matter supports several fabrics
+at once). To remove one, delete the accessory in that controller's app.
+
+For a full factory reset (clears Matter fabrics *and* the saved BedJet address — e.g. to
+point the bridge at a different BedJet), erase the flash with the toolchain:
 
 ```bash
 idf.py -p COM5 erase-flash
 idf.py -p COM5 flash monitor
 ```
-
-This also clears the saved BedJet address, so discovery runs again on next boot — which
-is also how you point the bridge at a different BedJet.
 
 ---
 
@@ -387,17 +390,19 @@ ESP32-C6 only. `sdkconfig.defaults` pins the target, and the CI matrix builds ju
 Two workflows:
 
 - **Build and Release** (on `v*` tags) builds the firmware and publishes a GitHub
-  Release. For **each** target it attaches the combined image and a matching
-  per-firmware checksum (`firmware_<target>_combined.bin.sha256`, coreutils format) —
-  so adding targets later never shares one checksum file.
+  Release. The firmware version comes from the tag (`git describe`), so Apple Home
+  shows the tagged version. Per target it attaches the combined image, its `.sha256`,
+  and the individual partition parts (`part_<target>_0x<offset>_<name>.bin`).
 - **Deploy Flasher** (on release published and on push to `main`) mirrors every
-  release's firmware into the Pages site at `web/firmware/<tag>/` and writes
+  release's parts into the Pages site at `web/firmware/<tag>/` and writes
   `web/firmware/index.json`, then publishes the site.
 
-The flasher loads that same-origin `index.json`, lists versions newest-first
-(defaulting to latest), and verifies each image's SHA-256 before flashing. This
-same-origin mirror is necessary because **GitHub release assets are not
-CORS-fetchable from a browser** — the page cannot download them directly.
+The flasher loads that same-origin `index.json`, lists versions newest-first (defaulting
+to latest), verifies each part's SHA-256, and writes **only the individual partitions —
+it never touches the NVS partition**, so Matter commissioning and the BedJet pairing
+survive a firmware update. This same-origin mirror is necessary because **GitHub
+release assets are not CORS-fetchable from a browser** — the page cannot download them
+directly.
 
 > **One-time setup:** Settings → Pages → **Build and deployment → Source = GitHub
 > Actions** (the flasher is served at `/web/index.html`, with `/` redirecting to it).
