@@ -1,7 +1,9 @@
 # SPIKE: Matter over Wi-Fi (alongside the Thread firmware)
 
-Status: **scaffold only — not built or validated.** Branch `spike/matter-wifi`, based on
-`main`. The existing Thread firmware is unchanged in behaviour (default transport).
+Status: **scaffold — build-verified, runtime not tested.** All five board/transport
+combinations build (sizes below) but none has been run on hardware. Branch
+`spike/matter-wifi`, based on `main`. The Thread firmware is unchanged (default
+transport).
 
 ## Objective
 
@@ -80,11 +82,21 @@ Requirements / caveats:
   partition-part images, so the release must expose `firmware_<target>_app.bin` (an
   ESP app image with `esp_app_desc`). The release workflow currently ships the combined
   image and the parts; add a clean app-only asset for OTA.
-- **Flash budget.** The Wi-Fi build is larger than Thread (Wi-Fi + supplicant + netif +
-  TLS/cert bundle), and `esp_https_ota` adds HTTP/TLS code on top. The 4 MB layout pins
-  both OTA slots at `0x1F0000`; measure and, if needed, move Wi-Fi/OTA boards to 8 MB
-  (`CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y` + `0x300000` slots). This is the main open
-  question for "if it will all fit".
+- **Flash budget — measured, fits.** All transports/boards build and fit the shared
+  4 MB layout (`0x1F0000` = 2,031,616 B per slot), so OTA is kept rather than nixed:
+
+  | Board / transport | app size (bytes) | free in slot |
+  |---|---|---|
+  | esp32c6 / wifi | 1,799,712 | 231,904 (11.4%) |
+  | esp32c6 / thread | 1,629,552 | 402,064 (19.8%) |
+  | esp32c3 / wifi | 1,635,024 | 396,592 (19.5%) |
+  | esp32 / wifi | 1,509,552 | 522,064 (25.7%) |
+  | esp32s3 / wifi | 1,508,752 | 522,864 (25.7%) |
+
+  C6 Wi-Fi is the largest; `esp_https_ota` adds well under the remaining 11%. Still,
+  if a future change tightens it, the fallback is to drop OTA and update every board
+  through the flasher, or move to 8 MB (`CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y` + `0x300000`
+  slots).
 - `releases/latest/download/<asset>` is a stable redirect to the newest asset and
   works without the JSON API, but it cannot cheaply tell you the version, so the API
   check is still wanted to avoid reflashing the same build.
@@ -100,11 +112,14 @@ spike keeps this out of `build-release.yml` so the Thread release flow is untouc
 
 ## Open questions / risks
 
-- Does the Wi-Fi Matter build fit a 4 MB slot, or does Wi-Fi require 8 MB?
-- ESP32 (original) flash/RAM headroom for Matter + Wi-Fi + a BLE central.
+- ~~Does the Wi-Fi Matter build fit a 4 MB slot?~~ **Resolved: yes** (table above); OTA
+  kept.
+- ESP32 (original) fits (25.7% free) but is the oldest/slowest target; runtime RAM
+  headroom for Matter + Wi-Fi + a BLE central is still untested.
 - Wi-Fi provisioning UX and reconnect behaviour vs the Thread MTD model.
 - Coexistence of Wi-Fi + BLE central (single radio) under the BedJet link.
-- OTA trigger policy (boot check, Matter OTA Requestor, or a manual action).
+- OTA trigger policy (boot check, Matter OTA Requestor, or a manual action) and the
+  app-only release asset.
 
 ## How to validate
 
