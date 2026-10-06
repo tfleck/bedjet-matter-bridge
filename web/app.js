@@ -2,6 +2,16 @@
 const GITHUB_OWNER = "tfleck";
 const GITHUB_REPO = "bedjet-matter-bridge";
 
+// chip key -> the chipFamily name esp-web-tools expects.
+const CHIP_FAMILIES = {
+    esp32: "ESP32",
+    esp32s2: "ESP32-S2",
+    esp32s3: "ESP32-S3",
+    esp32c3: "ESP32-C3",
+    esp32c6: "ESP32-C6",
+    esp32h2: "ESP32-H2",
+};
+
 function checkBrowserSupport() {
     const hasWebSerial = "serial" in navigator;
     const warning = document.getElementById("browserWarning");
@@ -24,22 +34,12 @@ async function fetchLatestRelease() {
     }
 }
 
-function buildManifest(release) {
-    const chipMap = {
-        "esp32": "ESP32",
-        "esp32s2": "ESP32-S2",
-        "esp32s3": "ESP32-S3",
-        "esp32c3": "ESP32-C3",
-        "esp32c6": "ESP32-C6",
-        "esp32h2": "ESP32-H2",
-    };
-
+// Match assets by exact name so "esp32" cannot match "esp32c6".
+function buildsFromRelease(release) {
     const builds = [];
-    for (const [chipKey, chipFamily] of Object.entries(chipMap)) {
-        const asset = release.assets.find(a =>
-            a.name.toLowerCase().includes(chipKey) &&
-            a.name.endsWith(".bin")
-        );
+    for (const [chipKey, chipFamily] of Object.entries(CHIP_FAMILIES)) {
+        const name = `firmware_${chipKey}_combined.bin`;
+        const asset = release.assets.find(a => a.name.toLowerCase() === name);
         if (asset) {
             builds.push({
                 chipFamily: chipFamily,
@@ -47,12 +47,29 @@ function buildManifest(release) {
             });
         }
     }
+    return builds;
+}
 
-    return {
-        name: "BedJet Matter Bridge",
-        version: release.tag_name,
-        builds: builds,
-    };
+// Fallback for when the GitHub API is unavailable/rate-limited: the Pages
+// deploy stages every built image at firmware/<name> on the same origin, so
+// probe those instead. Same-origin also avoids any release-asset CORS issues.
+async function buildsFromStagedFirmware() {
+    const builds = [];
+    for (const [chipKey, chipFamily] of Object.entries(CHIP_FAMILIES)) {
+        const url = new URL(`firmware/firmware_${chipKey}_combined.bin`, window.location.href).href;
+        try {
+            const res = await fetch(url, { method: "HEAD" });
+            if (res.ok) {
+                builds.push({
+                    chipFamily: chipFamily,
+                    parts: [{ path: url, offset: 0 }]
+                });
+            }
+        } catch (_) {
+            // Not staged - skip.
+        }
+    }
+    return builds;
 }
 
 async function initInstallButton() {
@@ -60,44 +77,61 @@ async function initInstallButton() {
     const installButton = document.getElementById("installButton");
     const chipSelect = document.getElementById("chipSelect");
 
+    let version = "latest";
+    let builds = [];
+
     const release = await fetchLatestRelease();
-    if (!release) {
+    if (release) {
+        version = release.tag_name || version;
+        builds = buildsFromRelease(release);
+    }
+    if (builds.length === 0) {
+        builds = await buildsFromStagedFirmware();
+    }
+
+    if (builds.length === 0) {
         versionBadge.textContent = "Unavailable";
         versionBadge.style.background = "#f87171";
         return;
     }
 
-    versionBadge.textContent = release.tag_name;
+    versionBadge.textContent = version;
 
-    const manifest = buildManifest(release);
-    const manifestBlob = new Blob([JSON.stringify(manifest)], { type: "application/json" });
-    const manifestUrl = URL.createObjectURL(manifestBlob);
-    installButton.setAttribute("manifest", manifestUrl);
+    // Offer only the chips that actually have firmware for this release.
+    chipSelect.innerHTML = '<option value="">Auto-detect (recommended)</option>';
+    for (const build of builds) {
+        const opt = document.createElement("option");
+        opt.value = build.chipFamily;
+        opt.textContent = build.chipFamily;
+        chipSelect.appendChild(opt);
+    }
 
-    chipSelect.addEventListener("change", (e) => {
-        const selectedChip = e.target.value;
-        if (selectedChip === "") {
-            installButton.setAttribute("manifest", manifestUrl);
-        } else {
-            const filtered = {
-                name: manifest.name,
-                version: manifest.version,
-                builds: manifest.builds.filter(b =>
-                    b.chipFamily.toLowerCase().replace("-", "") ===
-                    selectedChip.replace("-", "")
-                )
-            };
-            const filteredBlob = new Blob([JSON.stringify(filtered)], { type: "application/json" });
-            installButton.setAttribute("manifest", URL.createObjectURL(filteredBlob));
+    let manifestUrl = null;
+    function showBuilds(selectedChip) {
+        const subset = selectedChip
+            ? builds.filter(b => b.chipFamily === selectedChip)
+            : builds;
+        if (manifestUrl) {
+            URL.revokeObjectURL(manifestUrl);
         }
-    });
+        const manifest = {
+            name: "BedJet Matter Bridge",
+            version: version,
+            builds: subset,
+        };
+        manifestUrl = URL.createObjectURL(
+            new Blob([JSON.stringify(manifest)], { type: "application/json" }));
+        installButton.setAttribute("manifest", manifestUrl);
+    }
+
+    showBuilds("");
+    chipSelect.addEventListener("change", () => showBuilds(chipSelect.value));
 }
 
 let serialPort = null;
 let serialReader = null;
 let serialKeepReading = false;
 let consoleBuffer = "";
-let qrCodeDetected = false;
 
 const connectBtn = document.getElementById("connectSerialBtn");
 const disconnectBtn = document.getElementById("disconnectSerialBtn");
@@ -140,9 +174,7 @@ async function readSerial() {
                 consoleOutput.textContent += text;
                 document.getElementById("serialConsole").scrollTop = document.getElementById("serialConsole").scrollHeight;
 
-                if (!qrCodeDetected) {
-                    detectQRCode(consoleBuffer);
-                }
+                detectPairingInfo(consoleBuffer);
 
                 if (consoleBuffer.length > 50000) {
                     consoleBuffer = consoleBuffer.slice(-25000);
@@ -158,18 +190,21 @@ async function readSerial() {
     connectBtn.style.display = "inline-flex";
 }
 
-function detectQRCode(text) {
+// The firmware prints "Manual pairing code: <11 digits>" and "QR payload: MT:..."
+// as text (it never renders an ASCII QR), so only those are parsed.
+function detectPairingInfo(text) {
     const manualMatch = text.match(/Manual pairing code:\s*(\d{11})/i);
+    const qrMatch = text.match(/QR payload:\s*(\S+)/i);
+
     if (manualMatch) {
         document.getElementById("manualCode").textContent = manualMatch[1];
-        document.getElementById("qrDisplay").style.display = "block";
     }
-
-    const qrBlockMatch = text.match(/((█|#|\s){20,}\n){10,}/);
-    if (qrBlockMatch && !qrCodeDetected) {
-        document.getElementById("qrAscii").innerHTML = "<pre>" + qrBlockMatch[0] + "</pre>";
+    if (qrMatch) {
+        document.getElementById("qrPayload").textContent = qrMatch[1];
+        document.getElementById("qrPayloadRow").style.display = "block";
+    }
+    if (manualMatch || qrMatch) {
         document.getElementById("qrDisplay").style.display = "block";
-        qrCodeDetected = true;
     }
 }
 

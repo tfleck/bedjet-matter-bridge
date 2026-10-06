@@ -1,7 +1,4 @@
 dependencies:
-  espressif/esp-matter:
-    version: "~1.6.0"
-  espressif/qrcode:
-    version: "^0.1.0"
-  idf:
-    version: "6.*"
+  espressif/esp_matter: ^1.6.0
+  h2zero/esp-nimble-cpp: ^2.5.0
+  idf: '>=5.5.4'

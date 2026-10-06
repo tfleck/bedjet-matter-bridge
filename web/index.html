@@ -29,12 +29,6 @@
                     <label for="chipSelect">Your ESP32 chip:</label>
                     <select id="chipSelect">
                         <option value="">Auto-detect (recommended)</option>
-                        <option value="esp32c6">ESP32-C6 (recommended, Thread support)</option>
-                        <option value="esp32s3">ESP32-S3</option>
-                        <option value="esp32">ESP32 (Classic)</option>
-                        <option value="esp32c3">ESP32-C3</option>
-                        <option value="esp32s2">ESP32-S2</option>
-                        <option value="esp32h2">ESP32-H2</option>
                     </select>
                 </div>
                 <div class="install-container">
@@ -50,7 +44,7 @@
             <div class="step-number">2</div>
             <div class="card-content">
                 <h2>Get Matter Pairing Code</h2>
-                <p>Click below to view the serial output and QR code.</p>
+                <p>Click below to view the serial output and the pairing code.</p>
                 <button id="connectSerialBtn" class="btn btn-secondary">
                     📡 Open Serial Monitor
                 </button>
@@ -64,11 +58,14 @@
                     </div>
                 </div>
                 <div id="qrDisplay" class="qr-display" style="display:none;">
-                    <h3>📱 Scan this QR code:</h3>
-                    <div id="qrAscii" class="qr-ascii"></div>
+                    <h3>Matter pairing</h3>
                     <div class="manual-code">
-                        <p>Manual pairing code:</p>
+                        <p>Manual pairing code &mdash; type this into your controller:</p>
                         <code id="manualCode"></code>
+                    </div>
+                    <div class="manual-code" id="qrPayloadRow" style="display:none;">
+                        <p>QR payload (paste into a QR generator for an image):</p>
+                        <code id="qrPayload" style="font-size:0.8rem; letter-spacing:0; word-break:break-all;"></code>
                     </div>
                 </div>
             </div>
@@ -86,17 +83,17 @@
                     <p>Ensure USB cable supports data transfer. Install CP210x or CH340 drivers if needed.</p>
                 </details>
                 <details>
-                    <summary>No QR code appears</summary>
-                    <p>Wait 30-60 seconds after connecting. Press RESET on the board to restart boot sequence.</p>
+                    <summary>No pairing code appears</summary>
+                    <p>Wait 30-60 seconds after connecting, or press RESET on the board to restart the boot sequence. A code is only printed while a commissioning window is open - an already-paired bridge shows none.</p>
                 </details>
             </div>
         </section>
 
         <footer>
             <p>
-                <a href="https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}" target="_blank">View on GitHub</a>
+                <a href="https://github.com/tfleck/bedjet-matter-bridge" target="_blank" rel="noopener">View on GitHub</a>
                 ·
-                <a href="https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases" target="_blank">Releases</a>
+                <a href="https://github.com/tfleck/bedjet-matter-bridge/releases" target="_blank" rel="noopener">Releases</a>
             </p>
         </footer>
     </div>

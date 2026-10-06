@@ -6,159 +6,79 @@ on:
       - 'v*'
 
 env:
-  IDF_VERSION: v6.0.2
-  PROJECT_NAME: bedjet_matter_bridge
+  # Enable ccache for the Matter build (the container ships it).
+  IDF_CCACHE_ENABLE: 1
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 35
+    runs-on: ubuntu-latest
+    container: espressif/idf:release-v5.5
+    # Full esp-matter build from a cold cache is slow; give it room.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target: esp32
-            name: ESP32
-            flash_size: 4MB
-            features: "wifi-only"
-          - target: esp32s2
-            name: ESP32-S2
-            flash_size: 4MB
-            features: "wifi-only"
-          - target: esp32s3
-            name: ESP32-S3
-            flash_size: 8MB
-            features: "wifi-plus"
-          - target: esp32c3
-            name: ESP32-C3
-            flash_size: 4MB
-            features: "wifi-efficient"
+          # Add more targets here; the web flasher picks up new firmware
+          # automatically from the release assets / staged Pages copies.
           - target: esp32c6
-            name: ESP32-C6
-            flash_size: 4MB
-            features: "thread-enabled"
-          - target: esp32h2
-            name: ESP32-H2
-            flash_size: 4MB
-            features: "thread-only"
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      - name: Install Matter host prerequisites
+        run: |
+          apt-get update && apt-get install -y \
+            bluez libdbus-1-dev libglib2.0-dev libical-dev \
+            systemd iproute2 libpixman-1-dev pkg-config
 
-      - name: Install ESP-IDF
-        uses: espressif/install-esp-idf-action@v1
+      - name: Cache managed components and toolchain
+        uses: actions/cache@v4
         with:
-          esp-idf-version: ${{ env.IDF_VERSION }}
-          target: ${{ matrix.target }}
-          extra-components: ""
+          path: |
+            managed_components
+            ~/.espressif
+          key: ${{ runner.os }}-matter-managed-${{ hashFiles('**/idf_component.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-matter-managed-
 
-      - name: Install ESP-Matter
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/ccache
+            ~/.ccache
+          key: ${{ runner.os }}-ccache-${{ matrix.target }}-${{ hashFiles('sdkconfig.defaults', 'main/idf_component.yml', 'CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-${{ matrix.target }}-
+
+      - name: Configure and build firmware
         shell: bash
         run: |
-          echo "Installing ESP-Matter..."
-          
-          # Navigate to IDF components directory
-          cd $IDF_PATH/components
-          
-          # Clone ESP-Matter repository
-          rm -rf esp-matter
-          git clone https://github.com/espressif/esp-matter.git esp-matter
-          cd esp-matter
-          
-          # Checkout specific version
-          git checkout release/v1.6
-          
-          # Initialize submodules
-          git submodule update --recursive --init
-          
-          # Install ESP-Matter (installs zap-cli, connectedhomeip deps, etc.)
-          ./install.sh -j 8
-          
-          # Set environment variable for CMake to find ESP-Matter
-          echo "EXTRA_COMPONENT_DIRS=$IDF_PATH/components" >> $GITHUB_ENV
-          
-          echo "ESP-Matter installation complete"
-
-      - name: Install Python dependencies
-        run: pip install pyserial esptool
-
-      - name: Configure SDK
-        shell: bash
-        run: |
-          cd $GITHUB_WORKSPACE
-          
+          . /opt/esp/idf/export.sh
+          # sdkconfig.defaults (authoritative) is applied by the project's
+          # CMakeLists, which sets SDKCONFIG_DEFAULTS.
           idf.py set-target ${{ matrix.target }}
-          idf.py fullclean || true
-          
-          cat >> sdkconfig.defaults << EOF
-          CONFIG_FREERTOS_HZ=1000
-          CONFIG_LOG_DEFAULT_LEVEL=3
-          CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
-          CONFIG_ESPTOOLPY_FLASHFREQ_80m=y
-          CONFIG_ESPTOOLPY_BAUD_921600=y
-          CONFIG_MBEDTLS_TLS_SERVER_AND_CLIENT=y
-          CONFIG_PARTITION_TABLE_TWO_OTA=y
-          CONFIG_SECURE_SIGNED_ON_REBOOT=n
-          CONFIG_SECURE_BOOT_V2_ENABLED=n
-          CONFIG_LWIP_MAX_SOCKETS=25
-          CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
-          CONFIG_HTTP_TRANSPORT_OVER_SSL=y
-          CONFIG_EXPERIMENTAL_FEATURES=y
-          EOF
-          
-          if [ "${{ matrix.features }}" == "thread-enabled" ] || [ "${{ matrix.features }}" == "thread-only" ]; then
-            cat >> sdkconfig.defaults << EOF
-            CONFIG_OPENTHREAD_ENABLED=y
-            CONFIG_ENABLE_THREAD_NETWORK=y
-            CONFIG_MATTER_USE_6LOWPAN=y
-            EOF
-          fi
-          
-          if [ "${{ matrix.flash_size }}" == "8MB" ]; then
-            echo 'CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y' >> sdkconfig.defaults
-          else
-            echo 'CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y' >> sdkconfig.defaults
-          fi
-
-      - name: Build firmware
-        shell: bash
-        run: |
-          cd $GITHUB_WORKSPACE
-          
-          VERSION="${GITHUB_REF#refs/tags/}"
-          sed -i "s/#define APP_VERSION.*/#define APP_VERSION \"$VERSION\"/" main/main.cpp
           idf.py build
 
       - name: Create combined firmware binary
         shell: bash
         run: |
-          TARGET=${{ matrix.target }}
-          BIN_FILE="bedjet_matter_bridge.bin"
+          . /opt/esp/idf/export.sh
+          TARGET="${{ matrix.target }}"
           OUTPUT="firmware_${TARGET}_combined.bin"
-          
-          esptool.py --chip $TARGET merge_bin \
-            -o build/$OUTPUT \
-            --flash_mode dio \
-            --flash_freq 80m \
-            --flash_size detect \
-            0x0 build/bootloader/bootloader.bin \
-            0x8000 build/partition_table/partition-table.bin \
-            0xe000 build/$BIN_FILE
-            
-          ls -lh build/*.bin
+          # flash_args lists paths relative to build/, so merge from there.
+          cd build
+          python -m esptool --chip "$TARGET" merge_bin -o "$OUTPUT" @flash_args
+          ls -lh "$OUTPUT"
 
       - name: Calculate SHA256
         shell: bash
         run: |
-          FILENAME="firmware_${{ matrix.target }}_combined.bin"
-          HASH=$(sha256sum build/$FILENAME | cut -d' ' -f1)
-          echo "$HASH  $FILENAME" >> build/checksums.txt
+          cd build
+          sha256sum "firmware_${{ matrix.target }}_combined.bin" > checksums.txt
+          cat checksums.txt
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -177,10 +97,10 @@ jobs:
         with:
           pattern: firmware-*
           merge-multiple: true
-      
+
       - name: Consolidate checksums
         run: cat checksums*.txt | sort -u > checksums_final.txt
-      
+
       - uses: actions/upload-artifact@v4
         with:
           name: checksums-all
@@ -196,12 +116,12 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download all firmware artifacts
+      - name: Download firmware artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: firmware-*
@@ -239,13 +159,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    
+
     steps:
-      - name: Download all artifacts
+      - name: Download firmware artifact
         uses: actions/download-artifact@v4
         with:
-          pattern: firmware-*
-          merge-multiple: true
+          name: firmware-esp32c6
 
       - name: Download checksums
         uses: actions/download-artifact@v4
@@ -261,31 +180,21 @@ jobs:
             ## Release: ${{ github.ref_name }}
 
             ### 🌐 Web Flasher
-            Flash directly from your browser:
+            Flash directly from your browser (Chrome, Edge, or Opera):
             **https://${{ github.repository_owner }}.github.io/bedjet-matter-bridge/**
 
-            ### 💡 Supported Chips
+            ### 💡 Supported chip
             | Chip | Features | Filename |
             |------|----------|----------|
-            | **ESP32-C6** ⭐ | Wi-Fi + BLE + Thread | `firmware_esp32c6_combined.bin` |
-            | ESP32-S3 | Wi-Fi + BLE | `firmware_esp32s3_combined.bin` |
-            | ESP32 | Wi-Fi + BLE | `firmware_esp32_combined.bin` |
-            | ESP32-C3 | Wi-Fi + BLE (RISC-V) | `firmware_esp32c3_combined.bin` |
-            | ESP32-S2 | Wi-Fi + BLE + USB | `firmware_esp32s2_combined.bin` |
-            | ESP32-H2 | BLE + Thread only | `firmware_esp32h2_combined.bin` |
+            | **ESP32-C6** | Wi-Fi + BLE + Thread | `firmware_esp32c6_combined.bin` |
 
-            ### 🔧 Manual Install
+            ### 🔧 Manual install
             ```bash
-            esptool.py --chip <CHIP> erase_flash
-            esptool.py --chip <CHIP> write_flash 0x0 firmware_<CHIP>_combined.bin
+            python -m esptool --chip esp32c6 erase_flash
+            python -m esptool --chip esp32c6 write_flash 0x0 firmware_esp32c6_combined.bin
             ```
           draft: false
           prerelease: false
           files: |
-            firmware_esp32_combined.bin
-            firmware_esp32s2_combined.bin
-            firmware_esp32s3_combined.bin
-            firmware_esp32c3_combined.bin
             firmware_esp32c6_combined.bin
-            firmware_esp32h2_combined.bin
             checksums_final.txt
