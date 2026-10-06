@@ -44,10 +44,13 @@ async function initInstallButton() {
     const chipSelect = document.getElementById("chipSelect");
     const noFirmware = document.getElementById("noFirmware");
     const verifyStatus = document.getElementById("verifyStatus");
+    const factoryReset = document.getElementById("factoryReset");
 
     const index = await fetchFirmwareIndex();
     // Newest first, as emitted by the Pages deploy.
     const versions = (index && Array.isArray(index.versions)) ? index.versions : [];
+    // NVS geometry for the optional factory reset.
+    const nvs = (index && index.nvs) || null;
 
     if (versions.length === 0) {
         // No firmware staged. Do NOT leave the install button without a
@@ -59,6 +62,9 @@ async function initInstallButton() {
         installButton.style.display = "none";
         versionSelect.disabled = true;
         chipSelect.disabled = true;
+        if (factoryReset) {
+            factoryReset.disabled = true;
+        }
         if (noFirmware) {
             noFirmware.style.display = "block";
         }
@@ -76,6 +82,7 @@ async function initInstallButton() {
     let activeBuilds = [];
     let manifestUrl = null;
     let verifiedBlobUrls = [];
+    let eraseBlobUrl = null;
 
     function setStatus(text, kind) {
         if (!verifyStatus) {
@@ -126,7 +133,6 @@ async function initInstallButton() {
             URL.revokeObjectURL(manifestUrl);
             manifestUrl = null;
         }
-        releaseVerifiedUrls();
         installButton.removeAttribute("manifest");
         installButton.style.display = "none";
         chipSelect.disabled = true;
@@ -139,8 +145,13 @@ async function initInstallButton() {
             return;
         }
 
-        setStatus("Verifying firmware…", "pending");
+        // Verify each build once; reuse the verified blobs afterwards so toggling
+        // the factory-reset option does not re-download the firmware.
         for (const build of subset) {
+            if (build.verifiedParts) {
+                continue;
+            }
+            setStatus("Verifying firmware…", "pending");
             let result;
             try {
                 result = await verifyBuild(build);
@@ -153,7 +164,23 @@ async function initInstallButton() {
             }
         }
 
-        setStatus("✓ Firmware SHA-256 verified", "ok");
+        // Optional factory reset: overwrite only the NVS partition with 0xFF
+        // (its erased state) so Matter commissioning and the BedJet link are
+        // cleared, without touching the rest of the flash.
+        const doErase = Boolean(factoryReset && factoryReset.checked && nvs);
+        let erasePart = null;
+        if (doErase) {
+            if (!eraseBlobUrl) {
+                eraseBlobUrl = URL.createObjectURL(new Blob(
+                    [new Uint8Array(nvs.size).fill(0xff)],
+                    { type: "application/octet-stream" }));
+            }
+            erasePart = { path: eraseBlobUrl, offset: nvs.offset };
+        }
+
+        setStatus(doErase
+            ? "✓ Firmware SHA-256 verified — factory reset will clear pairing"
+            : "✓ Firmware SHA-256 verified", "ok");
 
         const manifest = {
             name: "BedJet Matter Bridge",
@@ -161,10 +188,13 @@ async function initInstallButton() {
             // This device does not implement Improv serial, so skip the dialog's
             // post-install Improv wait entirely.
             new_install_improv_wait_time: 0,
-            // Update in place: never erase, so NVS (Matter commissioning + the
-            // saved BedJet pairing) is preserved.
+            // Never full-erase: the parts write only their own partitions, and the
+            // optional factory reset overwrites NVS explicitly.
             new_install_prompt_erase: false,
-            builds: subset.map(b => ({ chipFamily: b.chipFamily, parts: b.verifiedParts })),
+            builds: subset.map(b => ({
+                chipFamily: b.chipFamily,
+                parts: erasePart ? b.verifiedParts.concat([erasePart]) : b.verifiedParts,
+            })),
         };
         manifestUrl = URL.createObjectURL(
             new Blob([JSON.stringify(manifest)], { type: "application/json" }));
@@ -175,6 +205,12 @@ async function initInstallButton() {
 
     function selectVersion(tag) {
         const chosen = versions.find(v => v.tag === tag) || versions[0];
+        // Drop the previous version's downloaded parts and erase buffer.
+        releaseVerifiedUrls();
+        if (eraseBlobUrl) {
+            URL.revokeObjectURL(eraseBlobUrl);
+            eraseBlobUrl = null;
+        }
         activeBuilds = (chosen.builds || []).map(b => ({
             chipFamily: CHIP_FAMILIES[b.chip] || b.chip,
             parts: b.parts || [],
@@ -200,6 +236,9 @@ async function initInstallButton() {
 
     versionSelect.addEventListener("change", () => selectVersion(versionSelect.value));
     chipSelect.addEventListener("change", () => showBuilds(chipSelect.value));
+    if (factoryReset) {
+        factoryReset.addEventListener("change", () => showBuilds(chipSelect.value));
+    }
     selectVersion(versions[0].tag);
 }
 

@@ -52,6 +52,8 @@ header h1 { font-size: 1.5rem; color: var(--primary); }
 .verify-status.pending { color: var(--text-muted); }
 .verify-status.ok { color: #4ade80; }
 .verify-status.error { color: #f87171; }
+.factory-reset { display: flex; gap: 8px; align-items: flex-start; color: var(--text-muted); font-size: 0.85rem; margin: 10px 0; cursor: pointer; }
+.factory-reset input { margin-top: 2px; }
 
 .version-badge {
     background: var(--primary);

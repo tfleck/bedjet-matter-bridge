@@ -196,21 +196,18 @@ Try:
    look for `BedJet link is down; Matter attributes will go stale`, then
    `BedJet link is up; the bridge is live` again. No reboot of the bridge needed.
 
-### 7. Re-pair or change controllers
+### 7. Re-pair, change controllers, or factory reset
 
-The browser flasher updates in place and **never erases**, so your Matter commissioning
-and the BedJet pairing survive a firmware update — no re-setup.
+The browser flasher updates in place and **does not erase NVS**, so your Matter
+commissioning and the BedJet pairing survive a firmware update — no re-setup.
 
-To pair an additional controller, add the bridge again (Matter supports several fabrics
-at once). To remove one, delete the accessory in that controller's app.
-
-For a full factory reset (clears Matter fabrics *and* the saved BedJet address — e.g. to
-point the bridge at a different BedJet), erase the flash with the toolchain:
-
-```bash
-idf.py -p COM5 erase-flash
-idf.py -p COM5 flash monitor
-```
+- **Add a controller:** add the bridge again (Matter supports several fabrics at once).
+- **Remove a controller:** delete the accessory in that controller's app.
+- **Factory reset:** tick **Factory reset** on the flasher page before installing. It
+  overwrites only the NVS partition (Matter fabrics and the saved BedJet address), so
+  the bridge rediscovers the BedJet and needs re-pairing. With the toolchain,
+  `idf.py -p COM5 erase-flash` does a full-chip erase instead, followed by
+  `idf.py -p COM5 flash monitor`.
 
 ---
 
