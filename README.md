@@ -382,14 +382,25 @@ Arduino IDE, PuTTY, VS Code terminals, etc. Press `Ctrl+]` to exit `idf.py monit
 ESP32-C6 only. `sdkconfig.defaults` pins the target, and the CI matrix builds just
 `esp32c6`.
 
-### CI: releases
+### CI: releases and the flasher
 
-Pushing a `v*` tag builds the firmware and publishes a GitHub Release. For **each**
-firmware target it attaches the combined image **and a matching per-firmware checksum**
-(`firmware_<target>_combined.bin.sha256`, coreutils format) as release assets — so
-adding targets later never shares one checksum file. The web flasher lists every
-release that carries a `firmware_esp32c6_combined.bin`, newest first, and defaults to
-the latest; flashing needs no GitHub Actions Pages deploy.
+Two workflows:
+
+- **Build and Release** (on `v*` tags) builds the firmware and publishes a GitHub
+  Release. For **each** target it attaches the combined image and a matching
+  per-firmware checksum (`firmware_<target>_combined.bin.sha256`, coreutils format) —
+  so adding targets later never shares one checksum file.
+- **Deploy Flasher** (on release published and on push to `main`) mirrors every
+  release's firmware into the Pages site at `web/firmware/<tag>/` and writes
+  `web/firmware/index.json`, then publishes the site.
+
+The flasher loads that same-origin `index.json`, lists versions newest-first
+(defaulting to latest), and verifies each image's SHA-256 before flashing. This
+same-origin mirror is necessary because **GitHub release assets are not
+CORS-fetchable from a browser** — the page cannot download them directly.
+
+> **One-time setup:** Settings → Pages → **Build and deployment → Source = GitHub
+> Actions** (the flasher is served at `/web/index.html`, with `/` redirecting to it).
 
 - **Flash from the browser:** https://tfleck.github.io/bedjet-matter-bridge/web/index.html
 - **Tag a release:**

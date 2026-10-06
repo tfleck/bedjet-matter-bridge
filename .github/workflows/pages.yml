@@ -1,0 +1,117 @@
+name: Deploy Flasher
+
+# Publishes the web flasher and mirrors each release's firmware into the site,
+# so the browser can fetch it same-origin (GitHub release assets are not
+# CORS-fetchable from JS).
+on:
+  release:
+    types: [published]
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Download each release's firmware (server-side, no CORS) into
+      # web/firmware/<tag>/. gh CLI is preinstalled on ubuntu-latest.
+      - name: Stage firmware from all releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p web/firmware
+          # Newest release first.
+          gh release list --limit 100 --json tagName,isDraft,publishedAt \
+            -q '.[] | select(.isDraft==false) | [.publishedAt, .tagName] | @tsv' \
+            | sort -r | cut -f2 > /tmp/tags.txt
+          while IFS= read -r tag; do
+            [ -z "$tag" ] && continue
+            mkdir -p "web/firmware/$tag"
+            gh release download "$tag" --pattern 'firmware_*' \
+              --dir "web/firmware/$tag" --clobber || true
+          done < /tmp/tags.txt
+          echo "=== staged firmware ==="
+          find web/firmware -type f | sort
+
+      - name: Build firmware index
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, hashlib
+
+          tags = []
+          if os.path.exists("/tmp/tags.txt"):
+              tags = [t.strip() for t in open("/tmp/tags.txt") if t.strip()]
+
+          versions = []
+          for tag in tags:
+              d = os.path.join("web/firmware", tag)
+              if not os.path.isdir(d):
+                  continue
+              builds = []
+              for fn in sorted(os.listdir(d)):
+                  if not fn.endswith("_combined.bin"):
+                      continue
+                  chip = fn[len("firmware_"):-len("_combined.bin")]
+                  shafile = os.path.join(d, fn + ".sha256")
+                  if os.path.isfile(shafile):
+                      sha = open(shafile).read().split()[0]
+                  else:
+                      with open(os.path.join(d, fn), "rb") as fh:
+                          sha = hashlib.sha256(fh.read()).hexdigest()
+                  builds.append({
+                      "chip": chip,
+                      "path": f"firmware/{tag}/{fn}",
+                      "sha256": sha,
+                  })
+              if builds:
+                  versions.append({"tag": tag, "builds": builds})
+
+          os.makedirs("web/firmware", exist_ok=True)
+          index = {"versions": versions}
+          with open("web/firmware/index.json", "w") as fh:
+              json.dump(index, fh, indent=2)
+          print(json.dumps(index, indent=2))
+          PY
+
+      # Publish under /web/ so the flasher is at .../web/index.html; add a root
+      # redirect for the bare Pages URL.
+      - name: Assemble site
+        shell: bash
+        run: |
+          rm -rf _site
+          mkdir -p _site
+          cp -r web _site/web
+          printf '%s\n' '<!DOCTYPE html><meta http-equiv="refresh" content="0; url=web/index.html">' > _site/index.html
+          echo "=== site files ==="
+          find _site -type f | sort
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
