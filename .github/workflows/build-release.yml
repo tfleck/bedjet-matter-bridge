@@ -1,9 +1,11 @@
-name: Build, Release, and Deploy
+name: Build and Release
 
 on:
+  # Releases are tag-driven; the web flasher reads the release assets.
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 env:
   # Enable ccache for the Matter build (the container ships it).
@@ -19,8 +21,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Add more targets here; the web flasher picks up new firmware
-          # automatically from the release assets / staged Pages copies.
+          # Add more targets here; the web flasher lists every release that
+          # carries a firmware_<target>_combined.bin asset.
           - target: esp32c6
 
     steps:
@@ -77,8 +79,11 @@ jobs:
         shell: bash
         run: |
           cd build
-          sha256sum "firmware_${{ matrix.target }}_combined.bin" > checksums.txt
-          cat checksums.txt
+          # One checksum file per firmware, coreutils format so it verifies with
+          # `sha256sum -c firmware_<target>_combined.bin.sha256`.
+          sha256sum "firmware_${{ matrix.target }}_combined.bin" \
+            > "firmware_${{ matrix.target }}_combined.bin.sha256"
+          cat "firmware_${{ matrix.target }}_combined.bin.sha256"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -86,90 +91,25 @@ jobs:
           name: firmware-${{ matrix.target }}
           path: |
             build/firmware_${{ matrix.target }}_combined.bin
-            build/checksums.txt
+            build/firmware_${{ matrix.target }}_combined.bin.sha256
           retention-days: 30
 
-  aggregate-checksums:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: firmware-*
-          merge-multiple: true
-
-      - name: Consolidate checksums
-        run: cat checksums*.txt | sort -u > checksums_final.txt
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: checksums-all
-          path: checksums_final.txt
-
-  deploy-pages:
-    needs: [build, aggregate-checksums]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download firmware artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: firmware-*
-          merge-multiple: true
-          path: web/firmware
-
-      - name: Download checksums
-        uses: actions/download-artifact@v4
-        with:
-          name: checksums-all
-          path: web/
-
-      - name: Prepare web directory
-        shell: bash
-        run: |
-          mv web/checksums_final.txt web/checksums.txt 2>/dev/null || true
-          echo "=== Web directory contents ==="
-          find web/ -type f -exec ls -lh {} \;
-          echo "=== Web flasher ready ==="
-
-      - name: Setup Pages
-        uses: actions/configure-pages@v4
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: web/
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
-
   create-release:
-    needs: [build, aggregate-checksums, deploy-pages]
+    needs: [build]
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - name: Download firmware artifact
+      - name: Download firmware artifacts
         uses: actions/download-artifact@v4
         with:
-          name: firmware-esp32c6
+          pattern: firmware-*
+          merge-multiple: true
 
-      - name: Download checksums
-        uses: actions/download-artifact@v4
-        with:
-          name: checksums-all
+      - name: List release files
+        run: ls -lh
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -181,20 +121,21 @@ jobs:
 
             ### 🌐 Web Flasher
             Flash directly from your browser (Chrome, Edge, or Opera):
-            **https://${{ github.repository_owner }}.github.io/bedjet-matter-bridge/**
+            **https://${{ github.repository_owner }}.github.io/bedjet-matter-bridge/web/index.html**
 
             ### 💡 Supported chip
-            | Chip | Features | Filename |
-            |------|----------|----------|
-            | **ESP32-C6** | Wi-Fi + BLE + Thread | `firmware_esp32c6_combined.bin` |
+            | Chip | Features | Firmware | Checksum |
+            |------|----------|----------|----------|
+            | **ESP32-C6** | Wi-Fi + BLE + Thread | `firmware_esp32c6_combined.bin` | `firmware_esp32c6_combined.bin.sha256` |
 
             ### 🔧 Manual install
             ```bash
+            sha256sum --check firmware_esp32c6_combined.bin.sha256
             python -m esptool --chip esp32c6 erase_flash
             python -m esptool --chip esp32c6 write_flash 0x0 firmware_esp32c6_combined.bin
             ```
           draft: false
           prerelease: false
           files: |
-            firmware_esp32c6_combined.bin
-            checksums_final.txt
+            firmware_*_combined.bin
+            firmware_*_combined.bin.sha256

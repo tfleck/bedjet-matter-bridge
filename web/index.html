@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>BedJet Matter Bridge — Flasher</title>
     <link rel="stylesheet" href="styles.css">
-    <script type="module" src="https://unpkg.com/esp-web-tools@9/dist/web/install-button.js?module"></script>
+    <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
 </head>
 <body>
     <div class="container">
@@ -26,6 +26,12 @@
                 <h2>Install Firmware</h2>
                 <p>Connect your ESP32 via USB-C and click the button below.</p>
                 <div class="chip-selector">
+                    <label for="versionSelect">Firmware version:</label>
+                    <select id="versionSelect">
+                        <option value="">Loading…</option>
+                    </select>
+                </div>
+                <div class="chip-selector">
                     <label for="chipSelect">Your ESP32 chip:</label>
                     <select id="chipSelect">
                         <option value="">Auto-detect (recommended)</option>
@@ -34,6 +40,11 @@
                 <div class="install-container">
                     <esp-web-install-button id="installButton"></esp-web-install-button>
                 </div>
+                <div id="verifyStatus" class="verify-status" style="display:none;"></div>
+                <div class="browser-warning" id="noFirmware" style="display:none;">
+                    <p>No firmware is available right now. Flash from a tagged release, or build from source (see the README).</p>
+                </div>
+                <p class="hint">After flashing, continue to step 2 to open the serial monitor and read your Matter pairing code.</p>
                 <div class="browser-warning" id="browserWarning" style="display:none;">
                     <p>⚠️ Requires Chrome, Edge, or Opera with Web Serial API.</p>
                 </div>

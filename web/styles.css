@@ -47,6 +47,11 @@ header {
 
 header h1 { font-size: 1.5rem; color: var(--primary); }
 .subtitle { color: var(--text-muted); font-size: 0.9rem; }
+.hint { color: var(--text-muted); font-size: 0.85rem; margin-top: 8px; }
+.verify-status { font-size: 0.85rem; margin-top: 8px; }
+.verify-status.pending { color: var(--text-muted); }
+.verify-status.ok { color: #4ade80; }
+.verify-status.error { color: #f87171; }
 
 .version-badge {
     background: var(--primary);

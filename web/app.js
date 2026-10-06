@@ -20,8 +20,9 @@ function checkBrowserSupport() {
     }
 }
 
-async function fetchLatestRelease() {
-    const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`;
+// Newest first (GitHub returns releases in created_at descending order).
+async function fetchReleases() {
+    const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases?per_page=30`;
     try {
         const response = await fetch(apiUrl, {
             headers: { "Accept": "application/vnd.github.v3+json" }
@@ -29,103 +30,221 @@ async function fetchLatestRelease() {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return await response.json();
     } catch (error) {
-        console.error("Failed to fetch release:", error);
-        return null;
+        console.error("Failed to fetch releases:", error);
+        return [];
     }
 }
 
-// Match assets by exact name so "esp32" cannot match "esp32c6".
+// Match assets by exact name so "esp32" cannot match "esp32c6". Each firmware
+// carries its own <name>.sha256 asset; GitHub also attaches an immutable
+// `digest` to every asset, used as a fallback verification source.
 function buildsFromRelease(release) {
     const builds = [];
     for (const [chipKey, chipFamily] of Object.entries(CHIP_FAMILIES)) {
         const name = `firmware_${chipKey}_combined.bin`;
         const asset = release.assets.find(a => a.name.toLowerCase() === name);
-        if (asset) {
-            builds.push({
-                chipFamily: chipFamily,
-                parts: [{ path: asset.browser_download_url, offset: 0 }]
-            });
+        if (!asset) {
+            continue;
         }
+        const shaAsset = release.assets.find(a => a.name.toLowerCase() === `${name}.sha256`);
+        builds.push({
+            chipFamily: chipFamily,
+            url: asset.browser_download_url,
+            sha256Url: shaAsset ? shaAsset.browser_download_url : null,
+            digest: asset.digest || null,
+        });
     }
     return builds;
 }
 
-// Fallback for when the GitHub API is unavailable/rate-limited: the Pages
-// deploy stages every built image at firmware/<name> on the same origin, so
-// probe those instead. Same-origin also avoids any release-asset CORS issues.
-async function buildsFromStagedFirmware() {
-    const builds = [];
-    for (const [chipKey, chipFamily] of Object.entries(CHIP_FAMILIES)) {
-        const url = new URL(`firmware/firmware_${chipKey}_combined.bin`, window.location.href).href;
+function toHex(buffer) {
+    return [...new Uint8Array(buffer)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Expected SHA-256 for a build: prefer the published per-firmware .sha256,
+// fall back to GitHub's asset digest.
+async function expectedSha256(build) {
+    if (build.sha256Url) {
         try {
-            const res = await fetch(url, { method: "HEAD" });
+            const res = await fetch(build.sha256Url);
             if (res.ok) {
-                builds.push({
-                    chipFamily: chipFamily,
-                    parts: [{ path: url, offset: 0 }]
-                });
+                const match = (await res.text()).match(/\b([0-9a-f]{64})\b/i);
+                if (match) {
+                    return match[1].toLowerCase();
+                }
             }
-        } catch (_) {
-            // Not staged - skip.
+        } catch (error) {
+            console.error("Failed to fetch checksum file:", error);
         }
     }
-    return builds;
+    if (build.digest && build.digest.startsWith("sha256:")) {
+        return build.digest.slice("sha256:".length).toLowerCase();
+    }
+    return null;
 }
 
 async function initInstallButton() {
     const versionBadge = document.getElementById("versionBadge");
+    const versionSelect = document.getElementById("versionSelect");
     const installButton = document.getElementById("installButton");
     const chipSelect = document.getElementById("chipSelect");
+    const noFirmware = document.getElementById("noFirmware");
+    const verifyStatus = document.getElementById("verifyStatus");
 
-    let version = "latest";
-    let builds = [];
-
-    const release = await fetchLatestRelease();
-    if (release) {
-        version = release.tag_name || version;
-        builds = buildsFromRelease(release);
+    // Every published release that carries firmware becomes a selectable
+    // version. GitHub returns releases newest-first, so index 0 is latest.
+    const versions = [];
+    for (const release of await fetchReleases()) {
+        if (release.draft) {
+            continue;
+        }
+        const builds = buildsFromRelease(release);
+        if (builds.length > 0) {
+            versions.push({ tag: release.tag_name, builds: builds });
+        }
     }
-    if (builds.length === 0) {
-        builds = await buildsFromStagedFirmware();
-    }
 
-    if (builds.length === 0) {
+    if (versions.length === 0) {
+        // No firmware reachable. Do NOT leave the install button without a
+        // manifest: esp-web-tools would resolve `null` relative to the page and
+        // fetch .../null. Hide it and explain instead.
         versionBadge.textContent = "Unavailable";
         versionBadge.style.background = "#f87171";
+        installButton.removeAttribute("manifest");
+        installButton.style.display = "none";
+        versionSelect.disabled = true;
+        chipSelect.disabled = true;
+        if (noFirmware) {
+            noFirmware.style.display = "block";
+        }
         return;
     }
 
-    versionBadge.textContent = version;
-
-    // Offer only the chips that actually have firmware for this release.
-    chipSelect.innerHTML = '<option value="">Auto-detect (recommended)</option>';
-    for (const build of builds) {
+    versionSelect.innerHTML = "";
+    versions.forEach((v, i) => {
         const opt = document.createElement("option");
-        opt.value = build.chipFamily;
-        opt.textContent = build.chipFamily;
-        chipSelect.appendChild(opt);
+        opt.value = v.tag;
+        opt.textContent = i === 0 ? `${v.tag} (latest)` : v.tag;
+        versionSelect.appendChild(opt);
+    });
+
+    let activeBuilds = [];
+    let manifestUrl = null;
+    let verifiedBlobUrls = [];
+
+    function setStatus(text, kind) {
+        if (!verifyStatus) {
+            return;
+        }
+        verifyStatus.textContent = text || "";
+        verifyStatus.className = "verify-status" + (kind ? " " + kind : "");
+        verifyStatus.style.display = text ? "block" : "none";
     }
 
-    let manifestUrl = null;
-    function showBuilds(selectedChip) {
-        const subset = selectedChip
-            ? builds.filter(b => b.chipFamily === selectedChip)
-            : builds;
+    function releaseVerifiedUrls() {
+        for (const url of verifiedBlobUrls) {
+            URL.revokeObjectURL(url);
+        }
+        verifiedBlobUrls = [];
+    }
+
+    // Download the firmware once, verify its SHA-256, and keep the exact
+    // verified bytes behind a blob URL so esp-web-tools flashes what we checked.
+    async function verifyBuild(build) {
+        const res = await fetch(build.url);
+        if (!res.ok) {
+            throw new Error(`firmware download failed (HTTP ${res.status})`);
+        }
+        const bytes = await res.arrayBuffer();
+        const actual = toHex(await crypto.subtle.digest("SHA-256", bytes));
+        const expected = await expectedSha256(build);
+        if (!expected) {
+            return { ok: false, reason: "no published checksum found" };
+        }
+        if (expected !== actual) {
+            return { ok: false, reason: `SHA-256 mismatch (expected ${expected})` };
+        }
+        const blobUrl = URL.createObjectURL(
+            new Blob([bytes], { type: "application/octet-stream" }));
+        verifiedBlobUrls.push(blobUrl);
+        build.parts = [{ path: blobUrl, offset: 0 }];
+        return { ok: true };
+    }
+
+    async function showBuilds(selectedChip) {
         if (manifestUrl) {
             URL.revokeObjectURL(manifestUrl);
+            manifestUrl = null;
         }
+        releaseVerifiedUrls();
+        installButton.removeAttribute("manifest");
+        installButton.style.display = "none";
+        chipSelect.disabled = true;
+
+        const subset = selectedChip
+            ? activeBuilds.filter(b => b.chipFamily === selectedChip)
+            : activeBuilds;
+        if (subset.length === 0) {
+            setStatus("", "");
+            return;
+        }
+
+        setStatus("Verifying firmware…", "pending");
+        for (const build of subset) {
+            let result;
+            try {
+                result = await verifyBuild(build);
+            } catch (error) {
+                result = { ok: false, reason: error.message };
+            }
+            if (!result.ok) {
+                setStatus(`Firmware verification failed: ${result.reason}. Not flashing.`, "error");
+                return;
+            }
+        }
+
+        setStatus("✓ Firmware SHA-256 verified", "ok");
+
         const manifest = {
             name: "BedJet Matter Bridge",
-            version: version,
-            builds: subset,
+            version: versionSelect.value,
+            // This device does not implement Improv serial, so skip the dialog's
+            // post-install Improv wait entirely.
+            new_install_improv_wait_time: 0,
+            builds: subset.map(b => ({ chipFamily: b.chipFamily, parts: b.parts })),
         };
         manifestUrl = URL.createObjectURL(
             new Blob([JSON.stringify(manifest)], { type: "application/json" }));
         installButton.setAttribute("manifest", manifestUrl);
+        installButton.style.display = "";
+        chipSelect.disabled = false;
     }
 
-    showBuilds("");
+    function selectVersion(tag) {
+        const chosen = versions.find(v => v.tag === tag) || versions[0];
+        activeBuilds = chosen.builds;
+        versionSelect.value = chosen.tag;
+        versionBadge.textContent = chosen.tag;
+        versionBadge.style.background = "";
+
+        // Offer only the chips that this version actually has firmware for.
+        chipSelect.innerHTML = '<option value="">Auto-detect (recommended)</option>';
+        for (const build of activeBuilds) {
+            const opt = document.createElement("option");
+            opt.value = build.chipFamily;
+            opt.textContent = build.chipFamily;
+            chipSelect.appendChild(opt);
+        }
+        installButton.style.display = "";
+        if (noFirmware) {
+            noFirmware.style.display = "none";
+        }
+        showBuilds("");
+    }
+
+    versionSelect.addEventListener("change", () => selectVersion(versionSelect.value));
     chipSelect.addEventListener("change", () => showBuilds(chipSelect.value));
+    selectVersion(versions[0].tag);
 }
 
 let serialPort = null;

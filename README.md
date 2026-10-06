@@ -15,7 +15,7 @@ protocol locally and re-exposes it as two Matter devices.
   `PercentSetting` / `PercentCurrent` / `FanMode`
 - **OTA-capable partition table** — two equal slots sized to fit the firmware
 - **Browser flasher** — flash from Chrome/Edge/Opera at
-  https://tfleck.github.io/bedjet-matter-bridge/ with no local toolchain
+  https://tfleck.github.io/bedjet-matter-bridge/web/index.html with no local toolchain
 
 ## Not implemented
 
@@ -47,7 +47,10 @@ espressif product page will say ESP32-C6.
 
 ### Software
 
-- ESP-IDF **v5.5.x**. You have it if `idf.py` resolves in your shell.
+Using the browser flasher? You only need Chrome, Edge, or Opera — skip this section.
+
+To build from source you need ESP-IDF **v5.5.x**. You have it if `idf.py` resolves in
+your shell.
   - Windows/VS Code: the ESP-IDF extension installs it to
     `C:\Espressif\tools` with the matching `export.ps1`.
   - Windows manual: run `C:\Espressif\tools\Microsoft.v5.5.5.PowerShell_profile.ps1`
@@ -69,7 +72,13 @@ controller, the controller shares its Thread credentials automatically.
 
 ---
 
-## What to do
+## Flash and pair
+
+End-user path — no toolchain. Open the flasher in Chrome, Edge, or Opera:
+
+**https://tfleck.github.io/bedjet-matter-bridge/web/index.html**
+
+Building from source instead? See [Development](#development).
 
 ### 1. Close the BedJet app on your phone
 
@@ -77,61 +86,31 @@ controller, the controller shares its Thread credentials automatically.
 BedJet phone app is connected, the bridge cannot connect, and it will not be able to
 until the app releases the link. Force-quit it.
 
-### 2. Build the firmware
+### 2. Flash the bridge
 
-```bash
-git clone https://github.com/tfleck/bedjet-matter-bridge.git
-cd bedjet-matter-bridge
-idf.py build
+1. Open the [flasher](https://tfleck.github.io/bedjet-matter-bridge/web/index.html)
+   in Chrome, Edge, or Opera.
+2. Connect the ESP32-C6 over USB-C with a **data** cable.
+3. Leave **Firmware version** on the latest (or pick an older release), keep the chip
+   selector on **Auto-detect**, and click **Install**.
+
+The page writes the combined firmware image, then opens a serial monitor. If the
+Install button does not appear, see [Troubleshooting](#troubleshooting) — you are
+probably not in a supported browser.
+
+### 3. Get the Matter pairing code
+
+After the board reboots, the serial monitor on the flasher page prints the pairing
+information:
+
+```
+  Manual pairing code: 34970112332
+  QR payload: MT:Y.K9042C00KA0648G00
 ```
 
-`sdkconfig.defaults` pins `CONFIG_IDF_TARGET="esp32c6"`, so a fresh clone needs no
-`set-target` step. The image is built for size (`-Os`, see
-`CONFIG_COMPILER_OPTIMIZATION_SIZE`) and reports roughly:
-
-```
-bedjet_matter_bridge.bin binary size 0x1899e0 bytes.
-Smallest app partition is 0x1f0000 bytes. 0x66620 bytes (21%) free.
-```
-
-#### Build caching
-
-The Matter stack is ~2200 objects, so incremental rebuilds depend on caching:
-
-- **ccache is on** and is detected automatically (`ccache will be used for faster
-  recompilation` appears in the CMake output). The first build compiles everything;
-  after that, touching `main/*.cpp` rebuilds a handful of objects and relinks in
-  about 1–2 minutes.
-- **Never run `idf.py fullclean` to fix a build problem.** It discards every cached
-  object and turns a 1-minute rebuild into a ~40-minute one. If `build.ninja` goes
-  missing, run `idf.py reconfigure` instead.
-- **Changing `sdkconfig.defaults`, `CMakeLists.txt`, or anything under
-  `managed_components/` changes compiler flags/inputs and invalidates ccache for the
-  whole project.** Batch those edits rather than tweaking them one at a time.
-- CI caches `managed_components`, the toolchain, and ccache between runs.
-
-### 3. Flash it
-
-The easiest path is the browser flasher: open
-https://tfleck.github.io/bedjet-matter-bridge/ in Chrome, Edge, or Opera, connect the
-board over USB, and click Install. To build and flash locally instead, use `idf.py`.
-
-Find your serial port first (Windows):
-
-```powershell
-Get-CimInstance Win32_SerialPort | Select-Object DeviceID
-```
-
-Or just look at the output of `idf.py flash`, which lists the ports it can see. Then:
-
-```bash
-idf.py -p COM5 flash monitor      # Linux/macOS: -p /dev/ttyUSB0
-```
-
-If flashing fails to open the port, another serial monitor is holding it — close
-Arduino IDE, PuTTY, VS Code terminals, etc.
-
-Press `Ctrl+]` to exit `idf.py monitor`.
+**Write the 11-digit manual pairing code down** — it changes on every reboot. Any
+115200-baud serial terminal works too (`idf.py monitor`, PuTTY, `screen`). A bridge
+that is already commissioned prints no code until its commissioning window is reopened.
 
 ### 4. Watch the first boot
 
@@ -219,7 +198,8 @@ Try:
 
 ### 7. Re-pair or change controllers
 
-Factory-reset Matter credentials by erasing the NVS partition:
+Factory-reset Matter credentials by erasing the flash. The simplest way is to re-run
+the browser flasher and choose **Erase** when it prompts. With the toolchain:
 
 ```bash
 idf.py -p COM5 erase-flash
@@ -347,24 +327,85 @@ of 5%.
 
 ## Development
 
+### Build from source
+
+```bash
+git clone https://github.com/tfleck/bedjet-matter-bridge.git
+cd bedjet-matter-bridge
+idf.py build
+```
+
+`sdkconfig.defaults` pins `CONFIG_IDF_TARGET="esp32c6"`, so a fresh clone needs no
+`set-target` step. The image is built for size (`-Os`, see
+`CONFIG_COMPILER_OPTIMIZATION_SIZE`) and reports roughly:
+
+```
+bedjet_matter_bridge.bin binary size 0x1899e0 bytes.
+Smallest app partition is 0x1f0000 bytes. 0x66620 bytes (21%) free.
+```
+
+#### Build caching
+
+The Matter stack is ~2200 objects, so incremental rebuilds depend on caching:
+
+- **ccache is on** and is detected automatically (`ccache will be used for faster
+  recompilation` appears in the CMake output). The first build compiles everything;
+  after that, touching `main/*.cpp` rebuilds a handful of objects and relinks in
+  about 1–2 minutes.
+- **Never run `idf.py fullclean` to fix a build problem.** It discards every cached
+  object and turns a 1-minute rebuild into a ~40-minute one. If `build.ninja` goes
+  missing, run `idf.py reconfigure` instead.
+- **Changing `sdkconfig.defaults`, `CMakeLists.txt`, or anything under
+  `managed_components/` changes compiler flags/inputs and invalidates ccache for the
+  whole project.** Batch those edits rather than tweaking them one at a time.
+- CI caches `managed_components`, the toolchain, and ccache between runs.
+
+### Flash from source
+
+Find your serial port first (Windows):
+
+```powershell
+Get-CimInstance Win32_SerialPort | Select-Object DeviceID
+```
+
+Or just look at the output of `idf.py flash`, which lists the ports it can see. Then:
+
+```bash
+idf.py -p COM5 flash monitor      # Linux/macOS: -p /dev/ttyUSB0
+```
+
+If flashing fails to open the port, another serial monitor is holding it — close
+Arduino IDE, PuTTY, VS Code terminals, etc. Press `Ctrl+]` to exit `idf.py monitor`.
+
 ### Supported targets
 
 ESP32-C6 only. `sdkconfig.defaults` pins the target, and the CI matrix builds just
 `esp32c6`.
 
-### Creating a Release
+### CI: releases
 
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
+Pushing a `v*` tag builds the firmware and publishes a GitHub Release. For **each**
+firmware target it attaches the combined image **and a matching per-firmware checksum**
+(`firmware_<target>_combined.bin.sha256`, coreutils format) as release assets — so
+adding targets later never shares one checksum file. The web flasher lists every
+release that carries a `firmware_esp32c6_combined.bin`, newest first, and defaults to
+the latest; flashing needs no GitHub Actions Pages deploy.
 
-GitHub Actions builds the ESP32-C6 firmware, publishes the combined image and a
-checksum as release assets, and deploys the browser flasher to GitHub Pages:
+- **Flash from the browser:** https://tfleck.github.io/bedjet-matter-bridge/web/index.html
+- **Tag a release:**
 
-- **Flash from the browser:** https://tfleck.github.io/bedjet-matter-bridge/
-- **Manual download:** grab `firmware_esp32c6_combined.bin` from the release and write
-  it with `python -m esptool --chip esp32c6 write_flash 0x0 firmware_esp32c6_combined.bin`.
+  ```bash
+  git tag v1.0.0
+  git push origin v1.0.0
+  ```
+
+- **Manual download:** grab `firmware_esp32c6_combined.bin` (and its `.sha256`) from the
+  release, then:
+
+  ```bash
+  sha256sum --check firmware_esp32c6_combined.bin.sha256
+  python -m esptool --chip esp32c6 write_flash 0x0 firmware_esp32c6_combined.bin
+  ```
 
 ### Debugging
 
