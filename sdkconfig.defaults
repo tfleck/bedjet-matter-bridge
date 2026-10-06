@@ -1,10 +1,14 @@
 # ==============================================================================
-# 0. Target
+# Common defaults, shared by every transport.
+#
+# The transport-specific block lives in sdkconfig.defaults.thread or
+# sdkconfig.defaults.wifi, selected by the MATTER_TRANSPORT CMake option
+# (CMakeLists.txt). Default transport is 'thread'.
+#
+# CONFIG_IDF_TARGET is intentionally NOT pinned here so the same tree can be
+# built for ESP32-C6 (Thread or Wi-Fi) and the Wi-Fi-only ESP32 / ESP32-C3 /
+# ESP32-S3. Run `idf.py set-target <board>` before configuring (CI does).
 # ==============================================================================
-# sdkconfig is gitignored, so without this a fresh clone falls back to the ESP32
-# default and the Thread / 802.15.4 build fails. ESP-IDF reads this while
-# selecting the toolchain.
-CONFIG_IDF_TARGET="esp32c6"
 
 # ==============================================================================
 # 1. System, FreeRTOS & Stability Tweaks
@@ -45,26 +49,26 @@ CONFIG_MBEDTLS_TLS_SERVER_AND_CLIENT=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 
 # ==============================================================================
-# 4. Bluetooth Core & NimBLE Optimization
+# 4. Bluetooth Core & NimBLE Optimization (both transports)
 # ==============================================================================
+# CHIPoBLE commissions the node (PASE) and, for Wi-Fi builds, carries the Wi-Fi
+# credentials; the BedJet central also uses this one NimBLE stack.
 CONFIG_BT_ENABLED=y
 CONFIG_BT_BLUEDROID_ENABLED=n
 CONFIG_BT_NIMBLE_ENABLED=y
-# Time-share the single C6 BLE controller: Matter owns NimBLE during
-# commissioning (CHIPoBLE for PASE + Thread dataset delivery), then the app
-# shuts Matter BLE down (without memory release) so the BedJet central can
-# init fresh. USE_BLE_ONLY_FOR_COMMISSIONING must stay OFF: when on, Matter
-# calls esp_bt_mem_release() which permanently frees the BLE BSS/data to the
-# heap and BedJet nimble_port_init() can never succeed again. Handover is
-# driven from main.cpp (Shutdown + retry, not kBLEDeinitialized - that event
-# only fires on the mem-release path).
+# Time-share the single radio: Matter owns NimBLE during commissioning, then the
+# app shuts Matter BLE down (without memory release) so the BedJet central can
+# init fresh. USE_BLE_ONLY_FOR_COMMISSIONING must stay OFF: when on, Matter calls
+# esp_bt_mem_release() which permanently frees the BLE BSS/data to the heap and
+# BedJet nimble_port_init() can never succeed again. Handover is driven from
+# main.cpp (Shutdown + retry, not kBLEDeinitialized - that event only fires on
+# the mem-release path).
 # CONFIG_USE_BLE_ONLY_FOR_COMMISSIONING is not set
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3
 # Kept at 3 deliberately: the NimBLE connection limit is shared between this
-# bridge's single BedJet client and Matter's CHIPoBLE commissioner. Dropping
-# it to 1 would save ~1.5 KB RAM but risks refusing the commissioner's
-# connection while the BedJet link is up. The bridge only ever creates one
-# client object and reuses it, so slot exhaustion cannot happen at 3.
+# bridge's single BedJet client and Matter's CHIPoBLE commissioner. Dropping it
+# to 1 would save ~1.5 KB RAM but risks refusing the commissioner's connection
+# while the BedJet link is up.
 CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
 CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
 CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
@@ -74,7 +78,7 @@ CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
 # ATT server are compiled out without it, and esp-matter's CHIP BLE layer then
 # fails to link with undefined ble_svc_gap_init / ble_svc_gatt_init /
 # ble_att_svr_read_handle.
-
+#
 # esp-nimble-cpp runs std::function GATT callbacks and service discovery on the
 # NimBLE host task. The C default of 4096 is not enough headroom for that.
 # NOTE: idf.py renames this key to CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE in the
@@ -83,53 +87,7 @@ CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
 CONFIG_BT_NIMBLE_TASK_STACK_SIZE=6144
 
 # ==============================================================================
-# 5. Native OpenThread & 802.15.4 Radio Config
-# ==============================================================================
-# Turn on the physical IEEE 802.15.4 radio link layer
-CONFIG_IEEE802154_ENABLED=y
-
-# Enable OpenThread Core Stack Engine
-CONFIG_OPENTHREAD_ENABLED=y
-CONFIG_OPENTHREAD_RADIO_NATIVE=y
-CONFIG_OPENTHREAD_CLI=n
-CONFIG_OPENTHREAD_LOG_LEVEL_DYNAMIC=n
-CONFIG_OPENTHREAD_LOG_LEVEL_NOTE=y
-
-# Configure as a Minimal Thread Device (MTD): this bridge is a BLE central
-# with the radio already shared, so it must not route for Apple's mesh. MTD
-# halves MLE chatter and duty cycle vs FTD. Only switch back to FTD if the
-# BedJet sits far from the Apple TV and needs this node as a mesh extender.
-# NOTE: this is a Kconfig choice with default FTD - the explicit unset line is
-# required or kconfgen keeps the old selection.
-CONFIG_OPENTHREAD_FTD=n
-CONFIG_OPENTHREAD_MTD=y
-CONFIG_OPENTHREAD_SRP_CLIENT=y
-CONFIG_OPENTHREAD_DNS_CLIENT=y
-
-# LwIP IPv6 optimizations specifically mapped for Thread routing payloads
-CONFIG_LWIP_IPV6=y
-CONFIG_LWIP_IPV6_AUTOCONFIG=n
-CONFIG_LWIP_IPV6_NUM_ADDRESSES=8
-CONFIG_LWIP_MULTICAST_PING=y
-
-# ==============================================================================
-# 6. Wi-Fi
-# ==============================================================================
-# ESP32-C6 has a combo Wi-Fi + BLE + 802.15.4 radio (SOC_PHY_COMBO_MODULE), so
-# NimBLE and Thread coexist natively. Wi-Fi and 802.15.4 cannot be used at the
-# same time, so Wi-Fi is compiled but permanently off.
-#
-# There is deliberately NO esp_coex configuration here. components/esp_coex
-# arbitrates Wi-Fi against Bluetooth only - it has no knowledge of 802.15.4, and
-# enabling it only serves to force-disable OpenThread diagnostics. The earlier
-# CONFIG_ESP_COEX_SW_COEXIST_ENABLE / CONFIG_EXTERNAL_COEX_ENABLE settings were
-# removed for that reason; CONFIG_OPENTHREAD_COEXIST_ENABLE never existed in
-# ESP-IDF and was being silently dropped.
-CONFIG_USE_MINIMAL_MDNS=n
-CONFIG_ENABLE_WIFI_STATION=n
-
-# ==============================================================================
-# 7. Matter data model
+# 5. Matter data model
 # ==============================================================================
 # VendorName/ProductName shown in Home come from the CHIP
 # DeviceInstanceInfoProvider. Those macros default to "TEST_VENDOR" /

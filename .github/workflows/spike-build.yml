@@ -1,0 +1,54 @@
+name: Spike build (multi-target / multi-transport)
+
+# Build-only matrix for the Matter-over-Wi-Fi spike. Verifies that the Thread and
+# Wi-Fi transports coexist and that the Wi-Fi-only boards build. Does not create
+# releases or touch Pages.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - spike/matter-wifi
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: espressif/idf:release-v5.5
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: esp32c6
+            transport: thread
+          - target: esp32c6
+            transport: wifi
+          - target: esp32s3
+            transport: wifi
+          - target: esp32c3
+            transport: wifi
+          - target: esp32
+            transport: wifi
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build ${{ matrix.target }} / ${{ matrix.transport }}
+        shell: bash
+        run: |
+          . /opt/esp/idf/export.sh
+          idf.py -DMATTER_TRANSPORT=${{ matrix.transport }} set-target ${{ matrix.target }}
+          idf.py -DMATTER_TRANSPORT=${{ matrix.transport }} build
+
+      - name: Report size
+        shell: bash
+        run: |
+          ls -l build/bedjet_matter_bridge.bin
+          grep -E "CONFIG_IDF_TARGET=|CONFIG_ENABLE_WIFI_STATION=|CONFIG_OPENTHREAD_ENABLED=" build/config/sdkconfig.h || true
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: spike-${{ matrix.target }}-${{ matrix.transport }}
+          path: build/bedjet_matter_bridge.bin
+          retention-days: 14

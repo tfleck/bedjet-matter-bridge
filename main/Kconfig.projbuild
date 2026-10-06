@@ -1,0 +1,12 @@
+menu "BedJet Matter Bridge"
+
+    config APP_WIFI_OTA
+        bool "OTA updates from GitHub over Wi-Fi (spike)"
+        default n
+        depends on ENABLE_WIFI_STATION
+        help
+            Check the GitHub latest release for an app-only image and apply it with
+            esp_https_ota over the Wi-Fi LAN. Wi-Fi transport only. See
+            SPIKE-MATTER-WIFI.md. Off by default until validated on hardware.
+
+endmenu

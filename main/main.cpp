@@ -13,16 +13,19 @@
 #include <esp_matter_core.h>
 #include <app/server/Server.h>
 #include <lib/support/logging/CHIPLogging.h>
-#include <platform/ESP32/OpenthreadLauncher.h>
 #include <platform/internal/BLEManager.h>
+#if CHIP_DEVICE_CONFIG_ENABLE_THREAD
+#include <platform/ESP32/OpenthreadLauncher.h>
 #include <esp_openthread_types.h>
 #include <esp_openthread.h>
 #include <esp_openthread_lock.h>
 #include <openthread/link.h>
 #include <openthread/thread.h>
+#endif
 
 #include "bedjet_ble.h"
 #include "bedjet_matter.h"
+#include "wifi_ota.h"
 
 static const char *TAG = "main";
 
@@ -291,12 +294,16 @@ extern "C" void app_main(void)
              ESP_IDF_VERSION_MAJOR, ESP_IDF_VERSION_MINOR, ESP_IDF_VERSION_PATCH);
     const esp_reset_reason_t reason = esp_reset_reason();
     ESP_LOGI(TAG, "Boot reason: %s (%d)", reset_reason_str(reason), (int)reason);
+#if CHIP_DEVICE_CONFIG_ENABLE_THREAD
     // Compile-time default dataset: only used until a commissioner provisions
     // a real dataset. The *active* dataset is logged on Thread attach below.
     ESP_LOGI(TAG, "Default Thread dataset (pre-commissioning): name=\"%s\" channel=%d panid=0x%04x",
              CONFIG_OPENTHREAD_NETWORK_NAME,
              CONFIG_OPENTHREAD_NETWORK_CHANNEL,
              CONFIG_OPENTHREAD_NETWORK_PANID);
+#else
+    ESP_LOGI(TAG, "Matter transport: Wi-Fi (no Thread)");
+#endif
 
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -366,6 +373,12 @@ extern "C" void app_main(void)
 
     // Attribute reports are only safe once the CHIP stack is up.
     g_matter.mark_matter_started();
+
+#if CONFIG_APP_WIFI_OTA
+    // Wi-Fi transport only: check GitHub for a newer app image and apply it.
+    // Succeeds once the node is provisioned onto a Wi-Fi network.
+    bedjet::wifi_ota_start();
+#endif
 
     // (CHIP logs are quieted via the esp_log_level_set calls above. The CHIP
     // runtime filter, chip::Logging::SetLogFilter(), is a no-op on ESP-IDF.)

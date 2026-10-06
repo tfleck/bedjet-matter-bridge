@@ -3,6 +3,7 @@ idf_component_register(
         "main.cpp"
         "bedjet_ble.cpp"
         "bedjet_matter.cpp"
+        "wifi_ota.cpp"
     INCLUDE_DIRS "."
     REQUIRES
         bt
@@ -10,4 +11,5 @@ idf_component_register(
         nvs_flash
         esp_matter
         esp_timer
+        esp_https_ota
 )

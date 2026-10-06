@@ -1,0 +1,38 @@
+# ==============================================================================
+# Thread (802.15.4) transport. Selected by the default MATTER_TRANSPORT=thread.
+# ESP32-C6 / ESP32-H2 only (they have the 802.15.4 radio).
+# ==============================================================================
+
+# Native OpenThread & 802.15.4 radio
+CONFIG_IEEE802154_ENABLED=y
+CONFIG_OPENTHREAD_ENABLED=y
+CONFIG_OPENTHREAD_RADIO_NATIVE=y
+CONFIG_OPENTHREAD_CLI=n
+CONFIG_OPENTHREAD_LOG_LEVEL_DYNAMIC=n
+CONFIG_OPENTHREAD_LOG_LEVEL_NOTE=y
+
+# Configure as a Minimal Thread Device (MTD): this bridge is a BLE central with
+# the radio already shared, so it must not route for Apple's mesh. MTD halves MLE
+# chatter and duty cycle vs FTD. Only switch back to FTD if the BedJet sits far
+# from the Apple TV and needs this node as a mesh extender.
+# NOTE: this is a Kconfig choice with default FTD - the explicit unset line is
+# required or kconfgen keeps the old selection.
+CONFIG_OPENTHREAD_FTD=n
+CONFIG_OPENTHREAD_MTD=y
+CONFIG_OPENTHREAD_SRP_CLIENT=y
+CONFIG_OPENTHREAD_DNS_CLIENT=y
+
+# LwIP IPv6 optimizations specifically mapped for Thread routing payloads
+CONFIG_LWIP_IPV6=y
+CONFIG_LWIP_IPV6_AUTOCONFIG=n
+CONFIG_LWIP_IPV6_NUM_ADDRESSES=8
+CONFIG_LWIP_MULTICAST_PING=y
+
+# The C6 has a combo Wi-Fi + BLE + 802.15.4 radio, so NimBLE and Thread coexist
+# natively. Wi-Fi and 802.15.4 cannot run at the same time, so Wi-Fi stays off.
+#
+# There is deliberately NO esp_coex configuration here. components/esp_coex
+# arbitrates Wi-Fi against Bluetooth only - it has no knowledge of 802.15.4, and
+# enabling it only forces OpenThread diagnostics off.
+CONFIG_USE_MINIMAL_MDNS=n
+CONFIG_ENABLE_WIFI_STATION=n

@@ -1,0 +1,32 @@
+# ==============================================================================
+# Wi-Fi transport (Matter over Wi-Fi). Selected with -DMATTER_TRANSPORT=wifi.
+# Works on any Wi-Fi-capable ESP32 (C6 / S3 / C3 / ESP32). No 802.15.4.
+# ==============================================================================
+
+CONFIG_ENABLE_WIFI_STATION=y
+
+# No Thread / 802.15.4 on this transport.
+CONFIG_OPENTHREAD_ENABLED=n
+CONFIG_IEEE802154_ENABLED=n
+
+# The commissioner sends Wi-Fi credentials over CHIPoBLE (PASE), then the node
+# joins via the Wi-Fi NetworkCommissioning cluster. SoftAP provisioning is not
+# used, so drop the SoftAP code path.
+CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
+
+# IPv6 + mDNS for operational DNS-SD discovery on the LAN.
+CONFIG_LWIP_IPV6=y
+CONFIG_LWIP_IPV6_AUTOCONFIG=y
+CONFIG_LWIP_IPV6_NUM_ADDRESSES=8
+CONFIG_USE_MINIMAL_MDNS=n
+
+# ------------------------------------------------------------------------------
+# OTA directly from GitHub (esp_https_ota over the Wi-Fi LAN).
+#
+# Enable CONFIG_APP_WIFI_OTA to compile main/wifi_ota.cpp, which checks the
+# GitHub "latest release" asset and applies it to the inactive OTA slot. The
+# certificate bundle (CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y, set in the common
+# defaults) is required for the TLS handshake. Off by default until validated,
+# so it never affects the Thread build.
+# ------------------------------------------------------------------------------
+# CONFIG_APP_WIFI_OTA is not set
