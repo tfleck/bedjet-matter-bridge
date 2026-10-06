@@ -429,10 +429,10 @@ peripheral-level NimBLE and Thread logging, then rebuild:
 idf.py build && idf.py -p COM5 monitor
 ```
 
-The firmware also filters CHIP's own logs to errors at runtime
-(`chip::Logging::SetLogFilter(chip::Logging::kLogCategory_Error)` in `main.cpp`) to
-keep the boot log readable. To see Matter per-message/discovery logging, raise
-`CONFIG_CHIP_LOG_DEFAULT_LEVEL` in `sdkconfig.defaults` and drop that call.
+The firmware keeps CHIP's own logs quiet: on ESP-IDF the CHIP runtime log filter
+does nothing (the port maps CHIP categories straight to ESP_LOG levels), so `main.cpp`
+sets the `chip[...]` module tags to `ESP_LOG_WARN`. To see Matter per-message/discovery
+logging, raise those tags to `ESP_LOG_INFO` (or remove the block) in `main.cpp`.
 
 Press `Ctrl+]` to exit the monitor, `Ctrl+R` to restart the device.
 

@@ -316,9 +316,25 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    // esp-matter's attribute printer logs at INFO on every report; keep errors
-    // visible but silence the per-report spam.
+    // ESP-IDF's CHIP port routes CHIP categories straight through ESP_LOG
+    // (Error->ERROR, Progress->INFO, Detail->DEBUG), so the CHIP runtime log
+    // filter does not silence them: chip[EM]/chip[SC]/chip[DIS] flood the log.
+    // Quiet the CHIP module tags directly; the bridge's own tags stay at INFO.
     esp_log_level_set("esp_matter_attribute", ESP_LOG_WARN);
+    esp_log_level_set("chip[-]", ESP_LOG_WARN);
+    esp_log_level_set("chip[BLE]", ESP_LOG_WARN);
+    esp_log_level_set("chip[DL]", ESP_LOG_WARN);
+    esp_log_level_set("chip[DMG]", ESP_LOG_WARN);
+    esp_log_level_set("chip[DIS]", ESP_LOG_WARN);
+    esp_log_level_set("chip[EM]", ESP_LOG_WARN);
+    esp_log_level_set("chip[FP]", ESP_LOG_WARN);
+    esp_log_level_set("chip[FS]", ESP_LOG_WARN);
+    esp_log_level_set("chip[IM]", ESP_LOG_WARN);
+    esp_log_level_set("chip[IN]", ESP_LOG_WARN);
+    esp_log_level_set("chip[SC]", ESP_LOG_WARN);
+    esp_log_level_set("chip[SVR]", ESP_LOG_WARN);
+    esp_log_level_set("chip[TS]", ESP_LOG_WARN);
+    esp_log_level_set("chip[ZCL]", ESP_LOG_WARN);
 
     // 1. Build the Matter endpoint structure. This must exist before start()
     //    because attribute writes route through the node. The BLE status
@@ -351,11 +367,8 @@ extern "C" void app_main(void)
     // Attribute reports are only safe once the CHIP stack is up.
     g_matter.mark_matter_started();
 
-    // CHIP logs progress/detail for every message and discovery step
-    // (chip[EM]/chip[SC]/chip[DIS]), which dominates the boot log. Keep only
-    // errors. Done at runtime rather than via CONFIG_CHIP_LOG_DEFAULT_LEVEL so
-    // changing it does not force a full sdkconfig.h rebuild.
-    chip::Logging::SetLogFilter(chip::Logging::kLogCategory_Error);
+    // (CHIP logs are quieted via the esp_log_level_set calls above. The CHIP
+    // runtime filter, chip::Logging::SetLogFilter(), is a no-op on ESP-IDF.)
 
     // 3. If a fabric already exists, this boot never starts CHIPoBLE, so the
     //    handover already applies. Matter may still be holding nimble_port

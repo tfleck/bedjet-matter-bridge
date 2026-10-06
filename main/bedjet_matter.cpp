@@ -1,8 +1,10 @@
 #include "bedjet_matter.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <inttypes.h>
+#include <esp_mac.h>
 
 #include <setup_payload/OnboardingCodesUtil.h>
 
@@ -206,6 +208,26 @@ bool BedjetMatter::init(BedjetBLE *ble)
     if (!node_) {
         ESP_LOGE(TAG, "Failed to create Matter node");
         return false;
+    }
+
+    // BasicInformation.SerialNumber is only created when
+    // CONFIG_ESP_MATTER_ENABLE_OPTIONAL_ATTRIBUTES is set (it is not here), so
+    // controllers that read it get an unsupported-attribute error. Create it
+    // from the chip's base MAC so it is stable and unique per unit.
+    {
+        uint8_t mac[6] = {};
+        esp_efuse_mac_get_default(mac);
+        char serial[13];
+        snprintf(serial, sizeof(serial), "%02X%02X%02X%02X%02X%02X",
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        esp_matter::endpoint_t *ep0 = esp_matter::endpoint::get(0);
+        esp_matter::cluster_t *bi =
+            ep0 ? esp_matter::cluster::get(ep0, chip::app::Clusters::BasicInformation::Id)
+                : nullptr;
+        if (!bi || !esp_matter::cluster::basic_information::attribute::create_serial_number(
+                       bi, serial, sizeof(serial))) {
+            ESP_LOGW(TAG, "Could not set BasicInformation SerialNumber");
+        }
     }
 
     // ---- Endpoint 1: Thermostat ----
