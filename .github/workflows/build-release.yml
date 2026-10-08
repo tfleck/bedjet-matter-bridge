@@ -178,13 +178,17 @@ jobs:
             firmware_*_combined.bin.sha256
             part_*.bin
 
-  # Rebuild the Pages flasher after the release exists so the new version is
-  # mirrored automatically (the release event from GITHUB_TOKEN does not trigger
-  # workflows, so call it directly).
+  # Rebuild the flasher after the release exists. Dispatched on `main` on purpose:
+  # GitHub Pages serves the deployment for the default-branch ref, so a Pages
+  # deployment created at the tag ref is accepted but not served. workflow_dispatch
+  # is exempt from the "GITHUB_TOKEN cannot trigger workflows" rule.
   deploy-pages:
     needs: [create-release]
+    runs-on: ubuntu-latest
     permissions:
-      contents: read
-      pages: write
-      id-token: write
-    uses: ./.github/workflows/pages.yml
+      actions: write
+    steps:
+      - name: Trigger the flasher deploy on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run pages.yml --repo "${{ github.repository }}" --ref main

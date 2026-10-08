@@ -8,9 +8,8 @@ on:
     branches:
       - main
   workflow_dispatch:
-  # Called by Build and Release after the release is created: the "release:
-  # published" event is raised by GITHUB_TOKEN, which does not trigger workflows.
-  workflow_call:
+  # NOTE: this must run on `main` (default branch) for the deployment to be
+  # served; Build and Release dispatches it here after creating a release.
 
 permissions:
   contents: read
