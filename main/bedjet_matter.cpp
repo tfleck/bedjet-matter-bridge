@@ -24,8 +24,6 @@ constexpr uint32_t CLUSTER_FAN_CONTROL =
 constexpr uint32_t CLUSTER_BOOLEAN_STATE =
     chip::app::Clusters::BooleanState::Id;
 
-constexpr uint32_t CLUSTER_ON_OFF = chip::app::Clusters::OnOff::Id;
-
 constexpr uint32_t ATTR_LOCAL_TEMPERATURE =
     chip::app::Clusters::Thermostat::Attributes::LocalTemperature::Id;
 constexpr uint32_t ATTR_OCCUPIED_HEATING_SETPOINT =
@@ -44,14 +42,6 @@ constexpr uint32_t ATTR_PERCENT_CURRENT =
 
 constexpr uint32_t ATTR_STATE_VALUE =
     chip::app::Clusters::BooleanState::Attributes::StateValue::Id;
-
-constexpr uint32_t ATTR_ON_OFF =
-    chip::app::Clusters::OnOff::Attributes::OnOff::Id;
-
-// BridgedDeviceBasicInformation (0x0039). Reachable (0x0011) is the per-child
-// liveness bit the controller renders as an unreachable accessory.
-constexpr uint32_t CLUSTER_BRIDGED_BASIC_INFO = 0x0039;
-constexpr uint32_t ATTR_REACHABLE             = 0x0011;
 
 // chip::app::Clusters::Thermostat::SystemModeEnum
 enum MatterSystemMode : uint8_t {
@@ -212,7 +202,7 @@ bool BedjetMatter::init(BedjetBLE *ble)
     // value ("Matter Accessory" / empty), the config default never surfaces -
     // mark_matter_started() below overwrites it via the provider WriteAttribute
     // path so the rename actually lands.
-    strncpy(node_config.root_node.basic_information.node_label, "BedJet Matter Bridge",
+    strncpy(node_config.root_node.basic_information.node_label, "BedJet",
             sizeof(node_config.root_node.basic_information.node_label) - 1);
     // VendorName/ProductName are not fields of basic_information::config_t
     // (only node_label/unique_id are). They are supplied globally through
@@ -224,70 +214,58 @@ bool BedjetMatter::init(BedjetBLE *ble)
         return false;
     }
 
-    // Endpoint 0 doubles as the bridge's Aggregator: that is what makes a
-    // controller present this node as a bridge and render each bridged child's
-    // Reachable state independently of the node's own connectivity.
-    root_ep_ = esp_matter::endpoint::get(node_, 0);
-    if (!root_ep_) {
-        ESP_LOGE(TAG, "Failed to get root endpoint");
-        return false;
-    }
-    esp_matter::endpoint::aggregator::config_t aggregator_config;
-    if (esp_matter::endpoint::aggregator::add(root_ep_, &aggregator_config) != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to add Aggregator device type to root endpoint");
-        return false;
-    }
-
-    // ---- Endpoint 1: Bridged Node + Room Air Conditioner ("BedJet") ----
-    // On/Off and Thermostat are mandatory for this device type and Fan Control
-    // is an optional cluster, so the thermostat and fan controls stay on one
-    // child accessory instead of splitting into two device types (which Matter
-    // forbids on a single endpoint).
-    esp_matter::endpoint::room_air_conditioner::config_t rac_config;
-    rac_config.thermostat.feature_flags =
+    // ---- Endpoint 1: Thermostat ----
+    esp_matter::cluster::thermostat::config_t thermo_config;
+    thermo_config.feature_flags =
         chip::to_underlying(chip::app::Clusters::Thermostat::Feature::kHeating) |
         chip::to_underlying(chip::app::Clusters::Thermostat::Feature::kCooling);
-    rac_config.thermostat.local_temperature = static_cast<int16_t>(0);
+    thermo_config.local_temperature = static_cast<int16_t>(0);
     // kCoolingAndHeating: both features are declared above.
-    rac_config.thermostat.control_sequence_of_operation = 0x04;
-    rac_config.thermostat.system_mode                  = MATTER_SYS_OFF;
-    rac_config.thermostat.features.heating.occupied_heating_setpoint = static_cast<int16_t>(3000);
-    rac_config.thermostat.features.cooling.occupied_cooling_setpoint = static_cast<int16_t>(2400);
+    thermo_config.control_sequence_of_operation = 0x04;
+    thermo_config.system_mode                  = MATTER_SYS_OFF;
+    thermo_config.features.heating.occupied_heating_setpoint = static_cast<int16_t>(3000);
+    thermo_config.features.cooling.occupied_cooling_setpoint = static_cast<int16_t>(2400);
 
-    main_ep_ = esp_matter::endpoint::room_air_conditioner::create(
-        node_, &rac_config, esp_matter::ENDPOINT_FLAG_NONE, nullptr);
-    if (!main_ep_) {
-        ESP_LOGE(TAG, "Failed to create room air conditioner endpoint");
+    esp_matter::endpoint::thermostat::config_t thermo_ep_config;
+    thermo_ep_config.thermostat = thermo_config;
+
+    thermo_ep_ = esp_matter::endpoint::thermostat::create(
+        node_, &thermo_ep_config, esp_matter::ENDPOINT_FLAG_NONE, nullptr);
+    if (!thermo_ep_) {
+        ESP_LOGE(TAG, "Failed to create thermostat endpoint");
         return false;
     }
-    main_ep_id_ = esp_matter::endpoint::get_id(main_ep_);
+    thermo_ep_id_ = esp_matter::endpoint::get_id(thermo_ep_);
 
-    // Fan Control is optional for Room Air Conditioner, so create it explicitly.
-    // Without the MultiSpeed feature the cluster reports speed via
-    // PercentSetting / PercentCurrent in whole percent, which is what the
-    // BedJet's 20 steps map onto.
+    // ---- Endpoint 2: Fan ----
+    // Fan Control is not valid on a Thermostat endpoint (device type 0x0301), so
+    // the fan lives on its own endpoint (device type 0x002B). Without the
+    // MultiSpeed feature the cluster reports speed via PercentSetting /
+    // PercentCurrent in whole percent, which is what the BedJet's 20 steps map
+    // onto.
     esp_matter::cluster::fan_control::config_t fan_cluster_config;
     fan_cluster_config.fan_mode          = FAN_MODE_OFF;
     fan_cluster_config.fan_mode_sequence = 0;   // kOffLowMedHigh
     fan_cluster_config.percent_setting   = static_cast<uint8_t>(0);
     fan_cluster_config.percent_current   = 0;
-    if (!esp_matter::cluster::fan_control::create(
-            main_ep_, &fan_cluster_config, esp_matter::CLUSTER_FLAG_SERVER)) {
-        ESP_LOGE(TAG, "Failed to create fan control cluster");
+
+    esp_matter::endpoint::fan::config_t fan_ep_config;
+    fan_ep_config.fan_control = fan_cluster_config;
+
+    fan_ep_ = esp_matter::endpoint::fan::create(
+        node_, &fan_ep_config, esp_matter::ENDPOINT_FLAG_NONE, nullptr);
+    if (!fan_ep_) {
+        ESP_LOGE(TAG, "Failed to create fan endpoint");
         return false;
     }
+    fan_ep_id_ = esp_matter::endpoint::get_id(fan_ep_);
 
-    if (!add_bridged_node(main_ep_, "BedJet")) {
-        return false;
-    }
-
-    // ---- Endpoint 2: Bridged Node + Contact Sensor ("BedJet Filter") ----
-    // BooleanState is not part of Room Air Conditioner and a second application
-    // device type cannot share the endpoint, so the filter prompt gets its own
-    // bridged child accessory. Contact Sensor (device type 0x0015) is the
-    // standard device type whose required cluster is BooleanState, and every
-    // controller renders it, so StateValue=true (needs cleaning) surfaces as an
-    // "open" contact.
+    // ---- Endpoint 3: Filter maintenance (Contact Sensor) ----
+    // BooleanState is not a legal cluster on a Thermostat endpoint, so the
+    // BedJet's "clean filter" prompt gets its own endpoint. Contact Sensor
+    // (device type 0x0015) is the standard device type whose required cluster
+    // is BooleanState, and every controller renders it, so StateValue=true
+    // (needs cleaning) surfaces as an "open" contact.
     esp_matter::cluster::boolean_state::config_t filter_cluster_config;
     filter_cluster_config.state_value = false;
 
@@ -302,9 +280,25 @@ bool BedjetMatter::init(BedjetBLE *ble)
     }
     filter_ep_id_ = esp_matter::endpoint::get_id(filter_ep_);
 
-    if (!add_bridged_node(filter_ep_, "BedJet Filter")) {
+    // ---- Endpoint 4: BedJet link (Contact Sensor) ----
+    // The BLE link state, exposed the same way as the filter prompt: a Contact
+    // Sensor that is open (StateValue=true) whenever the BedJet link is down, so
+    // a controller can show the accessory even though the BedJet is unreachable.
+    // Starts open because the central only links after commissioning hands the
+    // radio over.
+    esp_matter::cluster::boolean_state::config_t link_cluster_config;
+    link_cluster_config.state_value = true;
+
+    esp_matter::endpoint::contact_sensor::config_t link_ep_config;
+    link_ep_config.boolean_state = link_cluster_config;
+
+    link_ep_ = esp_matter::endpoint::contact_sensor::create(
+        node_, &link_ep_config, esp_matter::ENDPOINT_FLAG_NONE, nullptr);
+    if (!link_ep_) {
+        ESP_LOGE(TAG, "Failed to create link endpoint");
         return false;
     }
+    link_ep_id_ = esp_matter::endpoint::get_id(link_ep_);
 
     // status_queue_ is length 1 and written with xQueueOverwrite so the bridge
     // task always sees the newest state rather than a backlog of stale frames.
@@ -340,38 +334,8 @@ bool BedjetMatter::init(BedjetBLE *ble)
         return false;
     }
 
-    ESP_LOGI(TAG, "Matter bridge created: root(bridge)=%u accessory=%u filter=%u",
-             esp_matter::endpoint::get_id(root_ep_), main_ep_id_, filter_ep_id_);
-    return true;
-}
-
-bool BedjetMatter::add_bridged_node(esp_matter::endpoint_t *endpoint, const char *label)
-{
-    // Bridged Node device type (0x0013) + BridgedDeviceBasicInformation.
-    if (esp_matter::endpoint::add_device_type(
-            endpoint, ESP_MATTER_BRIDGED_NODE_DEVICE_TYPE_ID,
-            ESP_MATTER_BRIDGED_NODE_DEVICE_TYPE_VERSION) != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to add Bridged Node device type");
-        return false;
-    }
-
-    esp_matter::cluster::bridged_device_basic_information::config_t bnbi_config;
-    // Start unreachable: the BedJet BLE link only comes up after commissioning.
-    bnbi_config.reachable = false;
-    esp_matter::cluster_t *bnbi = esp_matter::cluster::bridged_device_basic_information::create(
-        endpoint, &bnbi_config, esp_matter::CLUSTER_FLAG_SERVER);
-    if (!bnbi) {
-        ESP_LOGE(TAG, "Failed to create BridgedDeviceBasicInformation cluster");
-        return false;
-    }
-
-    char label_buf[33] = {};
-    std::strncpy(label_buf, label, sizeof(label_buf) - 1);
-    if (!esp_matter::cluster::bridged_device_basic_information::attribute::create_node_label(
-            bnbi, label_buf, static_cast<uint16_t>(std::strlen(label_buf)))) {
-        ESP_LOGE(TAG, "Failed to create bridged NodeLabel '%s'", label);
-        return false;
-    }
+    ESP_LOGI(TAG, "Matter endpoints created: thermostat=%u fan=%u filter=%u link=%u",
+             thermo_ep_id_, fan_ep_id_, filter_ep_id_, link_ep_id_);
     return true;
 }
 
@@ -419,26 +383,26 @@ void BedjetMatter::apply_identity()
          current.type == ESP_MATTER_VAL_TYPE_LONG_CHAR_STRING);
     const char *cur_str =
         (is_string && current.val.a.b != nullptr) ? (const char *)current.val.a.b : "";
-    // Migrate the old "BedJet" default (and an empty label) to the bridge's
-    // "BedJet Matter Bridge" name, but never clobber a user rename in Home.
-    const bool needs_default =
-        (cur_str[0] == '\0') || (std::strcmp(cur_str, "BedJet") == 0);
+    // Only rename on the create-time default: a prefix match treats an empty
+    // label and the old default as "not yet named", while a user rename in Home
+    // (which never starts with "BedJet") is left alone.
+    const bool already_named = (std::strncmp(cur_str, "BedJet", sizeof("BedJet")) == 0);
     if (is_string && current.val.a.b != nullptr) {
         esp_matter_mem_free(current.val.a.b);
         current.val.a.b = nullptr;
     }
-    if (!needs_default) {
+    if (already_named) {
         return;
     }
 
-    static char label[] = "BedJet Matter Bridge";
+    static char label[] = "BedJet";
     esp_matter_attr_val_t val = esp_matter_char_str(label, sizeof(label) - 1);
     const esp_err_t err =
         esp_matter::attribute::set_val(0, kBasicInfo, kNodeLabel, &val, false);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Failed to set NodeLabel: %s", esp_err_to_name(err));
     } else {
-        ESP_LOGI(TAG, "Bridge name set to 'BedJet Matter Bridge'");
+        ESP_LOGI(TAG, "Accessory name set to 'BedJet'");
     }
 }
 
@@ -493,7 +457,7 @@ void BedjetMatter::run_bridge()
         } else if (ready == conn_queue_) {
             uint8_t connected = 0;
             if (xQueueReceive(conn_queue_, &connected, 0) == pdTRUE) {
-                publish_reachable(connected != 0);
+                publish_link(connected != 0);
             }
         }
         // Drain at most one extra item from the *other* queues so bursts on
@@ -512,7 +476,7 @@ void BedjetMatter::run_bridge()
         }
         uint8_t connected = 0;
         if (xQueueReceive(conn_queue_, &connected, 0) == pdTRUE) {
-            publish_reachable(connected != 0);
+            publish_link(connected != 0);
         }
     }
 }
@@ -599,7 +563,7 @@ void BedjetMatter::apply_status(const BedjetNotification &n)
     // Baselines only advance on success: a failed report is retried on the
     // next status instead of being lost until the value changes again.
     if (local_centi != last_local_centi_) {
-        if (publish_nullable_i16(main_ep_id_, CLUSTER_THERMOSTAT, ATTR_LOCAL_TEMPERATURE, local_centi)) {
+        if (publish_nullable_i16(thermo_ep_id_, CLUSTER_THERMOSTAT, ATTR_LOCAL_TEMPERATURE, local_centi)) {
             last_local_centi_ = local_centi;
         }
     }
@@ -609,49 +573,38 @@ void BedjetMatter::apply_status(const BedjetNotification &n)
     // would advertise an impossible "heat to N and cool to N" range.
     if (system_mode == MATTER_SYS_HEAT) {
         if (target_centi != last_heat_centi_) {
-            if (publish_i16(main_ep_id_, CLUSTER_THERMOSTAT, ATTR_OCCUPIED_HEATING_SETPOINT, target_centi)) {
+            if (publish_i16(thermo_ep_id_, CLUSTER_THERMOSTAT, ATTR_OCCUPIED_HEATING_SETPOINT, target_centi)) {
                 last_heat_centi_ = target_centi;
             }
         }
     } else if (system_mode == MATTER_SYS_COOL || system_mode == MATTER_SYS_DRY) {
         if (target_centi != last_cool_centi_) {
-            if (publish_i16(main_ep_id_, CLUSTER_THERMOSTAT, ATTR_OCCUPIED_COOLING_SETPOINT, target_centi)) {
+            if (publish_i16(thermo_ep_id_, CLUSTER_THERMOSTAT, ATTR_OCCUPIED_COOLING_SETPOINT, target_centi)) {
                 last_cool_centi_ = target_centi;
             }
         }
     }
 
     if (system_mode != last_system_mode_) {
-        if (publish_enum8(main_ep_id_, CLUSTER_THERMOSTAT, ATTR_SYSTEM_MODE, system_mode)) {
+        if (publish_enum8(thermo_ep_id_, CLUSTER_THERMOSTAT, ATTR_SYSTEM_MODE, system_mode)) {
             last_system_mode_ = system_mode;
-        }
-    }
-
-    // Room Air Conditioner mandates On/Off. The BedJet is "on" whenever it is
-    // not in standby/wait, so mirror that into OnOff. The device type adds the
-    // OnOff DeadFrontBehavior feature, so this is informational: power is
-    // driven through Thermostat SystemMode, not the On/Off cluster.
-    const uint8_t onoff = running ? 1 : 0;
-    if (onoff != last_onoff_) {
-        if (publish_bool(main_ep_id_, CLUSTER_ON_OFF, ATTR_ON_OFF, running)) {
-            last_onoff_ = onoff;
         }
     }
 
     // Fan: PercentCurrent is the measured speed, PercentSetting is the commanded
     // target, FanMode is the coarse band derived from the measured speed.
     if (current_percent != last_percent_current_) {
-        if (publish_u8(main_ep_id_, CLUSTER_FAN_CONTROL, ATTR_PERCENT_CURRENT, current_percent)) {
+        if (publish_u8(fan_ep_id_, CLUSTER_FAN_CONTROL, ATTR_PERCENT_CURRENT, current_percent)) {
             last_percent_current_ = current_percent;
         }
     }
     if (fan_target_percent_ != last_percent_setting_) {
-        if (publish_nullable_u8(main_ep_id_, CLUSTER_FAN_CONTROL, ATTR_PERCENT_SETTING, fan_target_percent_)) {
+        if (publish_nullable_u8(fan_ep_id_, CLUSTER_FAN_CONTROL, ATTR_PERCENT_SETTING, fan_target_percent_)) {
             last_percent_setting_ = fan_target_percent_;
         }
     }
     if (fan_mode != last_fan_mode_) {
-        if (publish_enum8(main_ep_id_, CLUSTER_FAN_CONTROL, ATTR_FAN_MODE, fan_mode)) {
+        if (publish_enum8(fan_ep_id_, CLUSTER_FAN_CONTROL, ATTR_FAN_MODE, fan_mode)) {
             last_fan_mode_ = fan_mode;
         }
     }
@@ -782,33 +735,23 @@ bool BedjetMatter::publish_bool(uint16_t endpoint_id, uint32_t cluster_id,
     return true;
 }
 
-bool BedjetMatter::publish_reachable(bool reachable)
+bool BedjetMatter::publish_link(bool connected)
 {
-    // Reachable is read-only to controllers, so report() updates the data model
-    // and notifies subscribers without re-entering the PRE_UPDATE command path.
-    // The CHIP BridgedDeviceBasicInformation cluster emits ReachableChanged.
-    const uint8_t state = reachable ? 1 : 0;
-    if (state == last_reachable_) {
+    // The link Contact Sensor reports the alert state as "open": StateValue=true
+    // while the BedJet link is down, false (closed) while it is up.
+    const bool open = !connected;
+    const uint8_t state = open ? 1 : 0;
+    if (state == last_link_state_) {
         return true;
     }
 
-    esp_matter_attr_val_t val = esp_matter_bool(reachable);
-    bool ok = true;
-    for (uint16_t ep : {main_ep_id_, filter_ep_id_}) {
-        const PublishGuard guard(publishing_);
-        const esp_err_t err =
-            esp_matter::attribute::report(ep, CLUSTER_BRIDGED_BASIC_INFO, ATTR_REACHABLE, &val);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "Reachable report ep=%u -> %s", ep, esp_err_to_name(err));
-            ok = false;
-        }
+    if (!publish_bool(link_ep_id_, CLUSTER_BOOLEAN_STATE, ATTR_STATE_VALUE, open)) {
+        return false;
     }
-    if (ok) {
-        last_reachable_ = state;
-        ESP_LOGI(TAG, "BedJet link %s: accessory %s",
-                 reachable ? "up" : "down", reachable ? "reachable" : "unreachable");
-    }
-    return ok;
+    last_link_state_ = state;
+    ESP_LOGI(TAG, "BedJet link %s -> link sensor %s",
+             connected ? "up" : "down", open ? "open" : "closed");
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -920,8 +863,8 @@ esp_err_t BedjetMatter::matter_attribute_update_cb(
     }
 
     // Never send a command back to the BedJet for an endpoint we did not create.
-    // Thermostat, Fan Control and OnOff all live on the single RAC child.
-    if (endpoint_id != g_matter->main_ep_id_) {
+    if (endpoint_id != g_matter->thermo_ep_id_ &&
+        endpoint_id != g_matter->fan_ep_id_) {
         return ESP_OK;
     }
 
@@ -1018,8 +961,8 @@ void BedjetMatter::print_pairing_info() const
         ESP_LOGE(TAG, "  Failed to build the QR payload");
     }
 
-    ESP_LOGI(TAG, "  Bridge root: %u, BedJet accessory: %u, filter accessory: %u",
-             esp_matter::endpoint::get_id(root_ep_), main_ep_id_, filter_ep_id_);
+    ESP_LOGI(TAG, "  Thermostat endpoint: %u, fan endpoint: %u, filter endpoint: %u, link endpoint: %u",
+             thermo_ep_id_, fan_ep_id_, filter_ep_id_, link_ep_id_);
     ESP_LOGI(TAG, "==================================================");
 }
 
