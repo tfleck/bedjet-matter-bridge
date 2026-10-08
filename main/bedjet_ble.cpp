@@ -635,6 +635,18 @@ bool BedjetBLE::read_device_status()
              (st.flags & STATUS_FLAG_UNITS_SETUP) ? 1 : 0,
              (st.flags & STATUS_FLAG_TEST_PASSED) ? 1 : 0,
              st.notification, st.bio_step, st.update_phase);
+
+    // The notify byte is a device-originated prompt (clean filter, firmware
+    // update, biorhythm clock errors). It only exists in this 11-byte flags
+    // read, not the 20-byte state notification, so surface it here. Forward on
+    // change only: the caller mirrors it into Matter and re-publishing an
+    // unchanged prompt every 15 s poll would be pure churn.
+    if (st.notification != last_notify_code_) {
+        last_notify_code_ = st.notification;
+        if (notify_cb_) {
+            notify_cb_(st.notification);
+        }
+    }
     return true;
 }
 

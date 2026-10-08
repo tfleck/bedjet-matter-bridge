@@ -29,14 +29,20 @@ struct MatterCommand {
     int32_t value;
 };
 
-// Exposes the BedJet as two Matter endpoints:
+// Exposes the BedJet as a Matter bridge:
 //
-//   endpoint 1  Thermostat (device type 0x0301)
-//   endpoint 2  Fan        (device type 0x002B)
+//   endpoint 0  Root Node + Aggregator   NodeLabel "BedJet Matter Bridge"
+//   endpoint 1  Bridged Node + Room Air Conditioner  NodeLabel "BedJet"
+//               (On/Off + Thermostat + Fan Control all on one child accessory)
+//   endpoint 2  Bridged Node + Contact Sensor        NodeLabel "BedJet Filter"
 //
-// Fan Control is not a legal cluster on a Thermostat endpoint, and the BedJet's
-// 20 discrete fan steps map cleanly onto PercentSetting / PercentCurrent on a
-// dedicated fan tile, so the fan gets its own endpoint and device type.
+// Fan Control is not a legal cluster on a Thermostat endpoint (device type
+// 0x0301), so the thermostat and fan cannot be two application device types on
+// one endpoint. The Room Air Conditioner device type (0x0072) bundles On/Off +
+// Thermostat as mandatory clusters and Fan Control as an optional cluster, so
+// declaring that single device type keeps the thermostat and fan controls on
+// one accessory, exactly as before, while BridgedDeviceBasicInformation adds a
+// per-accessory Reachable bit.
 //
 // Threading model:
 //   * post_status() runs on the NimBLE host task and only overwrites a
@@ -50,6 +56,16 @@ public:
     // Thread-safe, non-blocking. Callable from the NimBLE host task.
     void post_status(const BedjetNotification& n);
 
+    // Thread-safe, non-blocking. Callable from the BLE task. Delivers a BedJet
+    // prompt code (BedjetNotificationCode) for the filter BooleanState.
+    void post_notify_code(uint8_t code);
+
+    // Thread-safe, non-blocking. Callable from the BLE task. Mirrors the BedJet
+    // BLE link state into BridgedDeviceBasicInformation.Reachable on both
+    // bridged endpoints, so a controller renders the accessory unreachable when
+    // the BedJet link is down while the (Thread-connected) bridge stays up.
+    void post_conn_state(bool connected);
+
     // Called once esp_matter::start() has returned. Applies the served
     // NodeLabel (see apply_identity): the node_config label is only the
     // create-time default, while the provider serves the NVS-persisted copy.
@@ -58,8 +74,8 @@ public:
     // Prints the Matter QR payload and manual pairing code.
     void print_pairing_info() const;
 
-    uint16_t thermostat_endpoint_id() const { return thermo_ep_id_; }
-    uint16_t fan_endpoint_id() const { return fan_ep_id_; }
+    uint16_t accessory_endpoint_id() const { return main_ep_id_; }
+    uint16_t filter_endpoint_id() const { return filter_ep_id_; }
 
 private:
     static void bridge_task_entry(void* arg);
@@ -67,6 +83,7 @@ private:
 
     void apply_identity();
     void apply_status(const BedjetNotification& n);
+    void apply_filter_notify(uint8_t code);
     void execute_command(const MatterCommand& cmd);
     void learn_temp_limits(const BedjetNotification& n);
 
@@ -74,6 +91,11 @@ private:
     bool do_setpoint(int16_t centi_degrees);
     bool do_percent_setting(uint8_t percent);
     bool do_fan_mode(uint8_t matter_fan_mode);
+
+    // Declares the Bridged Node device type on an endpoint and attaches its
+    // BridgedDeviceBasicInformation cluster (Reachable + NodeLabel). Shared by
+    // the BedJet and filter child endpoints.
+    bool add_bridged_node(esp_matter::endpoint_t* endpoint, const char* label);
 
     float clamp_temp(float celsius) const;
     int16_t centi_from_temp(float celsius) const;
@@ -87,6 +109,8 @@ private:
     bool publish_nullable_u8(uint16_t endpoint_id, uint32_t cluster_id, uint32_t attribute_id, uint8_t value);
     bool publish_nullable_i16(uint16_t endpoint_id, uint32_t cluster_id, uint32_t attribute_id, int16_t value);
     bool publish_i16(uint16_t endpoint_id, uint32_t cluster_id, uint32_t attribute_id, int16_t value);
+    bool publish_bool(uint16_t endpoint_id, uint32_t cluster_id, uint32_t attribute_id, bool value);
+    bool publish_reachable(bool reachable);
 
     static uint8_t  bedjet_mode_to_system_mode(uint8_t mode);
     static int      system_mode_to_button(uint8_t matter_system_mode);
@@ -95,14 +119,17 @@ private:
 
     BedjetBLE*           ble_{nullptr};
     esp_matter::node_t*     node_{nullptr};
-    esp_matter::endpoint_t* thermo_ep_{nullptr};
-    esp_matter::endpoint_t* fan_ep_{nullptr};
+    esp_matter::endpoint_t* root_ep_{nullptr};
+    esp_matter::endpoint_t* main_ep_{nullptr};
+    esp_matter::endpoint_t* filter_ep_{nullptr};
 
-    uint16_t thermo_ep_id_{0};
-    uint16_t fan_ep_id_{0};
+    uint16_t main_ep_id_{0};
+    uint16_t filter_ep_id_{0};
 
     QueueHandle_t status_queue_{nullptr};
     QueueHandle_t cmd_queue_{nullptr};
+    QueueHandle_t notify_queue_{nullptr};
+    QueueHandle_t conn_queue_{nullptr};
     QueueSetHandle_t queue_set_{nullptr};
     TaskHandle_t  task_{nullptr};
 
@@ -126,6 +153,14 @@ private:
     uint8_t  last_percent_current_{0xFF};
     uint8_t  last_percent_setting_{0xFF};
     uint8_t  last_fan_mode_{0xFF};
+    // Room Air Conditioner OnOff (mandatory) mirrors "BedJet is running".
+    uint8_t  last_onoff_{0xFF};
+    // Filter BooleanState (StateValue) change detection. 0xFF means "nothing
+    // published yet", so the first notify code always lands.
+    uint8_t  last_filter_state_{0xFF};
+    // BridgedDeviceBasicInformation.Reachable change detection. Starts at 0xFF
+    // so the first BLE conn-state event always publishes.
+    uint8_t  last_reachable_{0xFF};
 
     // Set for the duration of a single device-originated report() call while
     // the bridge task is publishing. Scoped per report (not per apply_status)

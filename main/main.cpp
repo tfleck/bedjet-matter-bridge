@@ -31,6 +31,7 @@ static bedjet::BedjetMatter g_matter;
 
 static void bedjet_status_cb(const bedjet::BedjetNotification &n);
 static void bedjet_conn_cb(bool connected);
+static void bedjet_notify_cb(uint8_t code);
 
 // True once the BedJet central is allowed to own the NimBLE stack. Boot order
 // is Matter-first: CHIPoBLE owns NimBLE during PASE commissioning. BedJet
@@ -66,6 +67,7 @@ static void start_bedjet_ble()
     }
     g_ble.on_status(bedjet_status_cb);
     g_ble.on_conn_state(bedjet_conn_cb);
+    g_ble.on_notify(bedjet_notify_cb);
     if (!g_ble.init()) {
         ESP_LOGE(TAG, "BedJet BLE initialisation failed - will retry after Matter BLE shutdown settles");
         return;
@@ -256,11 +258,22 @@ static void bedjet_status_cb(const bedjet::BedjetNotification &n)
 
 static void bedjet_conn_cb(bool connected)
 {
+    // Runs on the BLE task. Non-blocking: enqueue the link state so the Matter
+    // bridge task owns the Reachable attribute write and updates it once the
+    // BedJet link changes.
+    g_matter.post_conn_state(connected);
     if (connected) {
         ESP_LOGI(TAG, "BedJet link is up; the bridge is live");
     } else {
         ESP_LOGW(TAG, "BedJet link is down; Matter attributes will go stale");
     }
+}
+
+static void bedjet_notify_cb(uint8_t code)
+{
+    // Runs on the BLE task (status poll). Non-blocking: enqueue the prompt code
+    // for the Matter bridge task, which owns the filter attribute write.
+    g_matter.post_notify_code(code);
 }
 
 static const char *reset_reason_str(esp_reset_reason_t reason)

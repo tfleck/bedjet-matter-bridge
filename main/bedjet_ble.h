@@ -17,6 +17,9 @@ namespace bedjet {
 
 using StatusCallback     = std::function<void(const BedjetNotification&)>;
 using ConnStateCallback  = std::function<void(bool connected)>;
+// Device-originated prompt code from the 11-byte status read (BedjetNotificationCode).
+// Fired on change only, from the BLE task inside read_device_status().
+using NotifyCallback     = std::function<void(uint8_t code)>;
 
 class BedjetClientCallbacks : public NimBLEClientCallbacks {
 public:
@@ -61,6 +64,7 @@ public:
 
     void on_status(StatusCallback cb)           { status_cb_  = std::move(cb); }
     void on_conn_state(ConnStateCallback cb)    { conn_cb_    = std::move(cb); }
+    void on_notify(NotifyCallback cb)           { notify_cb_  = std::move(cb); }
 
 private:
     friend class BedjetClientCallbacks;
@@ -168,6 +172,10 @@ private:
 
     StatusCallback     status_cb_;
     ConnStateCallback  conn_cb_;
+    NotifyCallback     notify_cb_;
+    // Last notify code forwarded, so the callback fires only on a change. 0xFF
+    // is not a valid BedjetNotificationCode, so the first read always reports.
+    uint8_t            last_notify_code_{0xFF};
 };
 
 } // namespace bedjet

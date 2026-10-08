@@ -138,6 +138,8 @@ CONFIG_ENABLE_WIFI_STATION=n
 # main would miss the provider, which compiles inside esp-matter).
 # NOTE: CONFIG_ESP_MATTER_AGGREGATOR_ENDPOINT_COUNT is intentionally left alone.
 # Its Kconfig range is "1 5", so setting 0 is rejected and clamped back with a
-# kconfgen warning. It also never creates an aggregator endpoint: the only
-# consumer in esp-matter 1.6.0 is the MAX_BRIDGED_DEVICE_COUNT arithmetic in
-# esp_matter_bridge.h. This node is a plain composed node, not a bridged one.
+# kconfgen warning. It also never creates an aggregator endpoint: this esp-matter
+# release has no consumer for it (the old esp_matter_bridge.h is gone). The node
+# is made a bridge at runtime instead, by adding the Aggregator device type to
+# endpoint 0 and the Bridged Node device type to each child endpoint in
+# bedjet_matter.cpp.
